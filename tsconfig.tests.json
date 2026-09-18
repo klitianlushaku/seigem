@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Node's --experimental-strip-types requires explicit .ts extensions in
+    // relative imports. Next.js uses `bundler` resolution which forbids them,
+    // so tests are type-checked under their own config with ESM semantics.
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // Only the test suite and the modules it imports; app/UI code is covered by
+  // the main tsconfig (which supplies Next's generated route types).
+  "include": ["tests/**/*.ts", "src/services/**/*.ts", "src/config/**/*.ts", "src/lib/**/*.ts", "src/types/**/*.ts"],
+  "exclude": ["node_modules", ".next"]
+}

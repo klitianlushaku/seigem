@@ -1,0 +1,275 @@
+rules_version = '2';
+
+// =============================================================================
+// Seigem — Firestore Security Rules
+// =============================================================================
+// Principles:
+//   1. Deny by default. Nothing is readable or writable unless explicitly
+//      allowed below.
+//   2. Every study set belongs to exactly one authenticated user. A user may
+//      never read or write another user's documents.
+//   3. Document content is never stored. Only the title and generated study
+//      content may be persisted — no file bytes, no extracted text, no pages,
+//      no slide XML.
+//   4. Plan and usage fields are server-owned. Clients may read them but must
+//      never be able to grant themselves a higher plan or more quota.
+//
+// -----------------------------------------------------------------------------
+// IMPLEMENTATION NOTE — list validation
+// -----------------------------------------------------------------------------
+// The rules engine does NOT support `.all(predicate)` over a list of maps.
+// Verified against the Firestore emulator:
+//   - `list.all(x -> fn(x))`  -> syntax error (Unexpected '>')
+//   - `list.all(x, fn(x))`    -> compiles but ALWAYS returns false
+//   - `list[0]` indexed access -> works for both maps and scalars
+//
+// Seigem therefore validates list contents by explicit per-index checks.
+// `hasValidFlashcardAt` returns true when the index is beyond the list end,
+// so the chain is safe for short lists and validates EVERY element for lists
+// up to MAX_SET_ITEMS.
+// -----------------------------------------------------------------------------
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Maximum flashcards / quiz questions validated per study set.
+    // Must stay in sync with MAX_ITEMS_PER_LIST in src/lib/firebase/schema.ts.
+    // Keep this a small fixed bound: rules expressions have a cost limit, so
+    // validating hundreds of indices is not viable. The server also truncates
+    // generated content to this size before writing.
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // =====================================================================
+    // Privacy: forbidden field names
+    // =====================================================================
+    function hasForbiddenFields(data) {
+      return data.keys().hasAny([
+        // extracted text in any guise
+        'rawText', 'extractedText', 'sourceText', 'documentText', 'pageText',
+        'fullText', 'ocrText', 'originalText', 'documentContent', 'text',
+        // document structure
+        'pages', 'paragraphs', 'slides', 'slideXml', 'slideText',
+        // binary / file payloads
+        'file', 'fileData', 'fileBytes', 'fileBase64', 'binary', 'base64',
+        'blob', 'buffer', 'data',
+        // file locations — Seigem never uploads files anywhere
+        'fileUrl', 'downloadUrl', 'storagePath', 'storageUrl', 'gsUrl'
+      ]);
+    }
+
+    // =====================================================================
+    // Element validators
+    // =====================================================================
+
+    function isValidFlashcard(card) {
+      return card.keys().hasOnly(['question', 'answer'])
+        && card.question is string && card.question.size() > 0
+        && card.question.size() <= 2000
+        && card.answer is string && card.answer.size() > 0
+        && card.answer.size() <= 2000;
+    }
+
+    function isValidQuizQuestion(q) {
+      return q.keys().hasOnly([
+          'question', 'options', 'correctOptionIndex', 'explanation'
+        ])
+        && q.question is string && q.question.size() > 0
+        && q.question.size() <= 2000
+        && q.options is list && q.options.size() >= 2 && q.options.size() <= 6
+        && q.options[0] is string && q.options[0].size() > 0 && q.options[0].size() <= 500
+        && q.options[1] is string && q.options[1].size() > 0 && q.options[1].size() <= 500
+        && q.options[2] is string && q.options[2].size() > 0 && q.options[2].size() <= 500
+        && q.correctOptionIndex is int
+        && q.correctOptionIndex >= 0
+        && q.correctOptionIndex < q.options.size()
+        && (!('explanation' in q)
+            || (q.explanation is string && q.explanation.size() <= 2000));
+    }
+
+    // =====================================================================
+    // List validation (bounded, per-index)
+    // =====================================================================
+    // `hasXAt(list, i)` is true when index i is past the end, so the chain is
+    // safe for shorter lists and validates every present element.
+    //
+    // MAX_LIST_ITEMS = 8. Chosen from measurement, not guesswork: the rules
+    // engine aborts with "maximum of 1000 expressions to evaluate has been
+    // reached" somewhere above this depth, because each index costs several
+    // expressions. 8 validated entries stay comfortably inside the budget
+    // while still covering a realistic study set (a handful of quiz questions
+    // or flashcards per generated batch).
+    //
+    // The server enforces the same cap before writing, so a document can never
+    // legitimately carry more than this.
+    // =====================================================================
+
+    function hasValidFlashcardAt(cards, i) {
+      return cards.size() <= i || isValidFlashcard(cards[i]);
+    }
+
+    function hasValidQuizAt(questions, i) {
+      return questions.size() <= i || isValidQuizQuestion(questions[i]);
+    }
+
+    function isValidFlashcardList(cards) {
+      return cards is list && cards.size() > 0 && cards.size() <= 8
+        && hasValidFlashcardAt(cards, 0) && hasValidFlashcardAt(cards, 1)
+        && hasValidFlashcardAt(cards, 2) && hasValidFlashcardAt(cards, 3)
+        && hasValidFlashcardAt(cards, 4) && hasValidFlashcardAt(cards, 5)
+        && hasValidFlashcardAt(cards, 6) && hasValidFlashcardAt(cards, 7);
+    }
+
+    function isValidQuizList(questions) {
+      return questions is list && questions.size() > 0 && questions.size() <= 8
+        && hasValidQuizAt(questions, 0) && hasValidQuizAt(questions, 1)
+        && hasValidQuizAt(questions, 2) && hasValidQuizAt(questions, 3)
+        && hasValidQuizAt(questions, 4) && hasValidQuizAt(questions, 5)
+        && hasValidQuizAt(questions, 6) && hasValidQuizAt(questions, 7);
+    }
+
+    // =====================================================================
+    // Study set schema
+    // =====================================================================
+
+    function hasOnlyAllowedStudySetFields(data) {
+      return data.keys().hasOnly([
+        'ownerUid', 'title', 'summary', 'flashcards', 'quizQuestions',
+        'hasSummary', 'hasFlashcards', 'hasQuiz', 'model',
+        'sourceFormat', 'sourceUnits',
+        'createdAt', 'updatedAt'
+      ]);
+    }
+
+    function isValidTitle(title) {
+      return title is string && title.size() > 0 && title.size() <= 120;
+    }
+
+    function isValidSummary(summary) {
+      return summary is string && summary.size() > 0 && summary.size() <= 20000;
+    }
+
+    // Presence flags must agree with the content actually present, so the
+    // history list can trust `hasSummary` without reading the whole document.
+    function summaryFlagOk(data) {
+      return data.hasSummary is bool
+        && data.hasSummary == (data.summary != null)
+        && (!data.hasSummary || isValidSummary(data.summary));
+    }
+
+    function flashcardsFlagOk(data) {
+      return data.hasFlashcards is bool
+        && data.hasFlashcards == (data.flashcards != null)
+        && (!data.hasFlashcards || isValidFlashcardList(data.flashcards));
+    }
+
+    function quizFlagOk(data) {
+      return data.hasQuiz is bool
+        && data.hasQuiz == (data.quizQuestions != null)
+        && (!data.hasQuiz || isValidQuizList(data.quizQuestions));
+    }
+
+    // Source metadata is display-only (which format the material came from and
+    // how many pages/slides). It is not source content, but it is still
+    // constrained so a malformed value cannot be stored. Both fields may be
+    // null on records created before they existed.
+    function sourceMetaOk(data) {
+      return (!('sourceFormat' in data)
+          || data.sourceFormat == null
+          || data.sourceFormat in ['pdf', 'docx', 'pptx'])
+        && (!('sourceUnits' in data)
+          || data.sourceUnits == null
+          || (data.sourceUnits is int
+              && data.sourceUnits >= 0
+              && data.sourceUnits <= 10000));
+    }
+
+    function isValidStudySet(data) {
+      return hasOnlyAllowedStudySetFields(data)
+        && !hasForbiddenFields(data)
+        && data.ownerUid == request.auth.uid
+        && isValidTitle(data.title)
+        && summaryFlagOk(data)
+        && flashcardsFlagOk(data)
+        && quizFlagOk(data)
+        && sourceMetaOk(data);
+    }
+
+    // =====================================================================
+    // users/{uid} — account metadata
+    // =====================================================================
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      // No client-side create: /api/auth/profile creates the profile.
+      allow create: if false;
+
+      // Only presentational identity fields may change. Plan, usage, and
+      // billing linkage are server-owned.
+      allow update: if isOwner(uid)
+        && request.resource.data.plan == resource.data.plan
+        && request.resource.data.usage == resource.data.usage
+        && request.resource.data.planExpiresAt == resource.data.planExpiresAt
+        && request.resource.data.whopSubscriptionId == resource.data.whopSubscriptionId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['displayName', 'email', 'updatedAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 200
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 320;
+
+      allow delete: if false;
+    }
+
+    // =====================================================================
+    // studySets/{studySetId} — generated study content
+    // =====================================================================
+    // SECURITY NOTE — `list` is a SEPARATE permission from `get`.
+    //
+    // Granting `list` without an ownership check is a real data leak: a query
+    // is evaluated per candidate document, and if `list` allows it, the
+    // documents are returned even though `get` would deny them. Verified
+    // against the emulator: with a permissive `list` rule, an unscoped query
+    // returned another user's study set in full.
+    //
+    // The ownership condition below is therefore mandatory on BOTH rules.
+    // Combined with Firestore's per-document evaluation, this means:
+    //   - an unscoped query fails as soon as it touches a foreign document
+    //     (test: "BLOCKS a query that is not scoped to the caller")
+    //   - a query scoped by ownerUid succeeds
+    // =====================================================================
+    match /studySets/{studySetId} {
+      allow get: if isSignedIn()
+        && resource.data.ownerUid == request.auth.uid;
+
+      allow list: if isSignedIn()
+        && request.query.limit <= 100
+        && resource.data.ownerUid == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidStudySet(request.resource.data);
+
+      allow update: if isSignedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && isValidStudySet(request.resource.data);
+
+      allow delete: if isSignedIn()
+        && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // =====================================================================
+    // Everything else is denied.
+    // =====================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

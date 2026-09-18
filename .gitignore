@@ -1,0 +1,62 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# SECRETS — must never be committed
+# ---------------------------------------------------------------------------
+# `.env*` covers .env, .env.local, .env.development.local, .env.production, etc.
+# `.env.example` is the ONE exception: it holds placeholders only, never real
+# values, and is committed so other developers know what to configure.
+.env*
+!.env.example
+
+# Firebase service account keys and any other credential material.
+serviceAccountKey*.json
+*-service-account*.json
+.firebase-service-account.json
+
+# Local package-manager cache (used when the global npm cache is unavailable).
+/.npm-cache/
+
+# Firebase emulator artifacts
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+.firebase/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+tsconfig.tests.tsbuildinfo
+next-env.d.ts

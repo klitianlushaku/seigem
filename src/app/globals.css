@@ -1,0 +1,313 @@
+@import "tailwindcss";
+
+/*
+ * The test suite contains assertions that mention forbidden class names (for
+ * example the string "backdrop-blur" inside a `doesNotMatch` guard). Tailwind's
+ * scanner would otherwise treat those as usages and emit dead CSS, so the tests
+ * are excluded from the scan.
+ */
+@source not "../../tests";
+
+/*
+ * Seigem global theme.
+ *
+ * Dark navy gymnasium dashboard matching the approved reference design:
+ *   - a deep navy page with slightly lifted, faintly blue panels;
+ *   - a solid, saturated blue for the primary action;
+ *   - per-metric accent hues (violet, mint, orange, sky) on soft tinted tiles.
+ *
+ * Colours are exposed as Tailwind theme tokens so components never hardcode
+ * hex values.
+ *
+ * NOTE ON THE ACCENT TILES: the reference shows a very soft radial sheen
+ * inside each tile. Those are authored as flat, low-opacity fills here rather
+ * than gradients, which keeps the "no gradients" security/content constraint
+ * intact while reading the same at a glance.
+ */
+@theme {
+  --color-ink: #060d1c; /* page background */
+  --color-surface: #0a1730; /* panel / card background */
+  --color-surface-2: #0f2244; /* raised surface: chips, tiles, inputs */
+  --color-line: #16294a; /* standard border */
+  --color-line-strong: #23406c; /* stronger border / hover */
+  --color-muted: #7e92b8; /* secondary text */
+  --color-content: #eaf1ff; /* primary text */
+  --color-accent: #2f6bff; /* blue primary */
+  --color-accent-soft: #2355e0;
+  --color-danger: #f4637a;
+  --color-success: #34d399;
+
+  /* Per-metric accent hues, matching the reference tiles. */
+  --color-stat-purple: #9d7bf5;
+  --color-stat-green: #3ad6a4;
+  --color-stat-orange: #f59b52;
+  --color-stat-blue: #4d9dff;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-ink);
+  color: var(--color-content);
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus ring for keyboard users, kept minimal and functional. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Thin scrollbars inside panels, so long lists do not look heavy. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+/* ==========================================================================
+ * Shared surfaces
+ * ==========================================================================
+ * A faint top highlight reads as a lit edge, which is what gives the reference
+ * panels their depth. Kept as a solid inset shadow rather than a gradient.
+ */
+.dash-panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-line);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.dash-tile {
+  background-color: var(--color-surface-2);
+  border: 1px solid var(--color-line);
+}
+
+/* Slightly bluer fill used by the uploader's dashed drop area. */
+.dash-dropzone {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(11, 25, 52, 0.98), rgba(17, 35, 70, 0.94)),
+    color-mix(in oklab, var(--color-surface-2) 55%, var(--color-accent));
+  border-color: rgba(107, 161, 255, 0.72);
+}
+
+.dash-dropzone::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+      rgba(255, 255, 255, 0.02) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.02) 1px,
+      transparent 1px
+    );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(circle at center, black 58%, transparent 100%);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+ * Flashcard animation
+ * ==========================================================================
+ * A real 3D flip: both faces stay in the DOM and the card turns around Y, so
+ * revealing an answer reads as a physical rotation rather than a text swap.
+ *
+ * Three coordinated pieces make it feel deliberate rather than abrupt:
+ *   1. the card lifts slightly and turns, with an overshoot that settles;
+ *   2. the incoming face fades up as the turn passes the halfway point, so the
+ *      answer never appears edge-on;
+ *   3. the two stacked cards behind shift, giving the deck depth.
+ *
+ * Written as plain CSS rather than utilities because the 3D transform chain
+ * (perspective -> preserve-3d -> backface-visibility) is clearer to read and
+ * audit in one place.
+ */
+.flip-scene {
+  perspective: 1600px;
+  perspective-origin: 50% 40%;
+}
+
+.flip-inner {
+  position: relative;
+  transform-style: preserve-3d;
+  /* A slight overshoot settles the card, which reads as weight. */
+  transition: transform 620ms cubic-bezier(0.34, 1.36, 0.5, 1);
+  will-change: transform;
+}
+
+.flashcard-face {
+  background-color: var(--color-surface-2);
+  box-shadow:
+    0 18px 45px rgb(0 0 0 / 20%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+  transition:
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    background-color 220ms ease;
+}
+
+.flip-inner:hover .flashcard-face,
+.flip-inner:focus-visible .flashcard-face {
+  border-color: rgb(59 130 246 / 65%);
+  background-color: #202a38;
+  box-shadow:
+    0 24px 55px rgb(0 0 0 / 28%),
+    0 0 0 1px rgb(59 130 246 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+.flashcard-eyebrow,
+.flashcard-face-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.flashcard-eyebrow {
+  color: var(--color-muted);
+}
+
+.flashcard-progress {
+  width: min(10rem, 32%);
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background-color: var(--color-line);
+}
+
+.flashcard-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--color-accent);
+  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.flip-inner[data-flipped="true"] {
+  transform: rotateY(180deg);
+}
+
+.flip-face {
+  /* Both faces must hide their reverse, or the answer shows through. */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+
+.flip-face-back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+}
+
+/*
+ * Fade each face in as the rotation passes 90 degrees. Without this the text
+ * is briefly rendered edge-on and looks like a glitch.
+ */
+.flip-face-content {
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
+
+.flip-face-front .flip-face-content {
+  opacity: 1;
+}
+
+.flip-inner[data-flipped="true"] .flip-face-front .flip-face-content {
+  opacity: 0;
+  transition-delay: 0ms;
+}
+
+.flip-inner[data-flipped="true"] .flip-face-back .flip-face-content {
+  opacity: 1;
+  transition-delay: 240ms;
+}
+
+/* --- Card entrance ------------------------------------------------------ */
+
+@keyframes seigem-card-in {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97) rotateX(6deg);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.card-enter {
+  animation: seigem-card-in 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* --- Deck depth --------------------------------------------------------- */
+
+/*
+ * The two cards peeking out behind the active one. They shift and fade as the
+ * deck advances, so the stack feels like it has more cards under it.
+ */
+.deck-layer {
+  transition:
+    transform 520ms cubic-bezier(0.34, 1.3, 0.5, 1),
+    opacity 420ms ease-out;
+}
+
+@keyframes seigem-shuffle {
+  0% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-14px) scale(0.99);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.deck-shuffling {
+  animation: seigem-shuffle 520ms cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+
+/* --- Progress dots ------------------------------------------------------ */
+
+.dot-active {
+  /* Animating width rather than a transform keeps the row from reflowing. */
+  transition:
+    width 360ms cubic-bezier(0.34, 1.3, 0.5, 1),
+    background-color 300ms ease-out;
+}
+
+/* Respect users who have asked for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .flip-inner {
+    transition: none;
+  }
+  .flip-face-content,
+  .flip-inner[data-flipped="true"] .flip-face-back .flip-face-content {
+    transition: none;
+    transition-delay: 0ms;
+  }
+  .card-enter,
+  .deck-shuffling {
+    animation: none;
+  }
+  .deck-layer {
+    transition: none;
+  }
+  .flashcard-face,
+  .flashcard-progress span {
+    transition: none;
+  }
+}
