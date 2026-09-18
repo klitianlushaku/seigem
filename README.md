@@ -712,11 +712,23 @@ restart.
 
 ### Vercel (rekomanduar)
 
-1. Lidh repository-n.
-2. Shto variablat e mjedisit në **Settings → Environment Variables**.
-3. Deploy.
+1. Importo `klitianlushaku/seigem` në Vercel.
+2. Lëre framework-un si **Next.js** dhe Node.js versionin **20.x** ose më të ri.
+3. Shto të gjitha variablat e shënuara **Kërkuar** në `.env.example` te
+  **Settings → Environment Variables** për **Production**, **Preview** dhe
+  **Development**, sipas nevojës.
+4. Vendos `NEXT_PUBLIC_APP_URL` te URL-ja publike e deployment-it, pa `/` në
+  fund, dhe bëj redeploy pasi ta dish domenin përfundimtar.
+5. Në Firebase Authentication → Settings → Authorized domains shto domenin
+  e Vercel-it dhe domenin personal, nëse përdoret.
+6. Deploy.
 
 > `FIREBASE_PRIVATE_KEY` duhet të ruajë `\n` ashtu siç është.
+
+Vercel përdor `npm ci` dhe `npm run build` përmes `vercel.json`. Nëse një
+deployment dështon gjatë build-it me `Missing required ... environment
+variable`, variabla mungon në mjedisin e deployment-it ose është shtuar vetëm
+pas build-it; plotësoje dhe bëj një redeploy.
 
 ### Pas deploy-it
 
