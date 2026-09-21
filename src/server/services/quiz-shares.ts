@@ -3,10 +3,9 @@ import "server-only";
 
 import { randomBytes } from "node:crypto";
 
-import { Timestamp } from "firebase-admin/firestore";
 
 import { COLLECTIONS } from "@/lib/firebase/collections";
-import { getAdminDb } from "@/server/firebase/admin";
+import { Timestamp, getAdminDb } from "@/server/firebase/admin";
 import { getStudySet } from "@/server/services/study-sets";
 import type { QuizQuestion } from "@/types";
 

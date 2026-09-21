@@ -9,13 +9,12 @@
  */
 import "server-only";
 
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type { DecodedIdToken } from "firebase-admin/auth";
 
 import { DEFAULT_PLAN_ID, isPlanId, type PlanId } from "@/config/plans";
 import { entitledPlan } from "@/lib/entitlement";
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
-import { getAdminDb } from "@/server/firebase/admin";
+import { FieldValue, Timestamp, getAdminDb } from "@/server/firebase/admin";
 import { serverDayKey } from "@/lib/utils/date";
 
 /** Shape returned to the client. Dates are serialized to ISO strings. */

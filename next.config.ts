@@ -10,36 +10,29 @@ const nextConfig: NextConfig = {
     root: path.resolve(__dirname),
   },
   /**
-   * Keep these packages OUT of the server bundle and load them from
-   * `node_modules` at runtime instead.
+   * `firebase-admin` is a CommonJS package whose `exports` map ALSO declares an
+   * ESM condition:
    *
-   * Why this is required — it caused every /api route to return HTTP 500 with
-   * an EMPTY body in production, while the identical code returned a correct
-   * 401 locally:
+   *   "./auth": { "require": "./lib/auth/index.js",
+   *               "import":  "./lib/esm/auth/index.js" }
    *
-   * The bundler rewrites dynamic server imports to hashed, build-local paths —
-   * e.g. `import("firebase-admin/app")` becomes
-   * `await __load("firebase-admin-a14c8a5423a75469/app")`. That hashed directory
-   * exists only inside the build output. On Vercel the serverless function is
-   * assembled from the file trace, which records the ORIGINAL
-   * `node_modules/firebase-admin/lib/...` paths, not the hashed alias. The
-   * module then fails to resolve at import time, so the route throws before any
-   * handler runs — which is why no JSON error body was ever produced.
+   * The ESM files contain real `import`/`export` syntax but live in a package
+   * whose package.json has no `"type": "module"`, so Node classifies them as
+   * CommonJS and refuses to load them as ESM. When anything loads the package
+   * through the `import` condition, every protected route dies at import time:
    *
-   * Marking them external makes the runtime `require` the real package path,
-   * which IS in the trace, so the import succeeds.
+   *   Error: Failed to load external module firebase-admin-.../auth:
+   *          Error [ERR_REQUIRE_ESM]: require() of ES Module ... not supported
    *
-   * `firebase-admin` is the critical one (every protected route needs it). The
-   * rest are CommonJS/dynamic-loading packages used only in server code and
-   * never needed in the browser bundle, so they carry the same risk.
+   * That surfaced as HTTP 500 with an EMPTY body, because the route threw while
+   * its imports were being evaluated and no handler ever ran.
+   *
+   * Keeping the package external (below) makes the serverless runtime load it
+   * with `require()`, which selects the CommonJS `require` condition and works.
+   * Verified: `require("firebase-admin/auth")` succeeds, while resolving the
+   * ESM condition is what fails.
    */
-  serverExternalPackages: [
-    "firebase-admin",
-    "mammoth",
-    "jszip",
-    "pdfjs-dist",
-    "standardwebhooks",
-  ],
+  serverExternalPackages: ["firebase-admin"],
   /**
    * Seigem has no marketing home page: the app IS the dashboard.
    *

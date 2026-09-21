@@ -15,11 +15,10 @@
  */
 import "server-only";
 
-import { Timestamp } from "firebase-admin/firestore";
 
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
 import { serverDayKey } from "@/lib/utils/date";
-import { getAdminDb } from "@/server/firebase/admin";
+import { Timestamp, getAdminDb } from "@/server/firebase/admin";
 
 /** Today's accumulated study time. */
 export interface StudyTime {

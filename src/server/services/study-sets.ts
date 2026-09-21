@@ -12,7 +12,6 @@
  */
 import "server-only";
 
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { MAX_TITLE_LENGTH } from "@/config/app";
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
@@ -25,7 +24,7 @@ import {
   validateQuizQuestion,
   validateTitle,
 } from "@/lib/firebase/schema";
-import { getAdminDb } from "@/server/firebase/admin";
+import { FieldValue, Timestamp, getAdminDb } from "@/server/firebase/admin";
 import { normalizeTitle } from "@/lib/utils/text";
 import type { Flashcard, QuizQuestion, StudySet } from "@/types";
 

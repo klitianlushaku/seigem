@@ -16,7 +16,6 @@
  */
 import "server-only";
 
-import { Timestamp } from "firebase-admin/firestore";
 
 import type { PlanId, UsageMetric } from "@/config/plans";
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
@@ -31,7 +30,7 @@ import {
   type RemainingUsage,
 } from "@/lib/quota";
 import { serverDayKey } from "@/lib/utils/date";
-import { getAdminDb } from "@/server/firebase/admin";
+import { Timestamp, getAdminDb } from "@/server/firebase/admin";
 import { ApiError } from "@/server/http/errors";
 
 export type { CurrentUsage, RemainingUsage };

@@ -11,11 +11,10 @@
  */
 import "server-only";
 
-import { Timestamp } from "firebase-admin/firestore";
 
 import type { PlanId } from "@/config/plans";
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
-import { getAdminDb } from "@/server/firebase/admin";
+import { Timestamp, getAdminDb } from "@/server/firebase/admin";
 
 /** Fields written when a subscription changes. */
 export interface SubscriptionUpdate {
