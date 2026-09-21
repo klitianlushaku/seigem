@@ -47,4 +47,16 @@ export function describeResolution(): {
   searchedDirs: string[];
   dirsThatExist: string[];
   adminPresent: boolean;
+  packageRoot: string | null;
+  rootEntries: string[] | null;
+  libEntries: string[] | null;
+  products: Record<
+    string,
+    {
+      entryPath: string;
+      entryExists: boolean;
+      loaded: boolean;
+      error: string | null;
+    }
+  >;
 };

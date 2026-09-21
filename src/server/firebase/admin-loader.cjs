@@ -212,7 +212,7 @@ function resolveAdminMain() {
 }
 
 /**
- * Reports what the loader can see, WITHOUT loading the SDK or throwing.
+ * Reports what the loader can see, WITHOUT throwing.
  *
  * Exposed so `/api/health` can explain a deployment failure directly, instead
  * of the only symptom being a generic 500. It reveals file paths and booleans
@@ -223,7 +223,12 @@ function resolveAdminMain() {
  *   cwd: string,
  *   searchedDirs: string[],
  *   dirsThatExist: string[],
- *   adminPresent: boolean
+ *   adminPresent: boolean,
+ *   packageRoot: string | null,
+ *   rootEntries: string[] | null,
+ *   libEntries: string[] | null,
+ *   products: Record<string, { entryPath: string, entryExists: boolean,
+ *                              loaded: boolean, error: string | null }>
  * }}
  */
 function describeResolution() {
@@ -240,6 +245,58 @@ function describeResolution() {
   }
 
   const resolved = resolveAdminMain();
+  const packageRoot = resolved ? path.dirname(path.dirname(resolved)) : null;
+
+  /**
+   * Lists a directory's entries, or null when it cannot be read.
+   * @param {string | null} dir
+   * @returns {string[] | null}
+   */
+  const readEntries = (dir) => {
+    if (!dir) return null;
+    try {
+      return fs.readdirSync(dir).slice(0, 40);
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * Attempts to load each product, capturing the exact error rather than
+   * letting it surface as an opaque 500.
+   * @type {Record<string, {entryPath: string, entryExists: boolean, loaded: boolean, error: string | null}>}
+   */
+  const products = {};
+
+  for (const product of ["app", "auth", "firestore"]) {
+    const entryPath = packageRoot
+      ? path.join(packageRoot, "lib", product, "index.js")
+      : "";
+    let entryExists = false;
+    let loaded = false;
+    let error = null;
+
+    if (entryPath) {
+      try {
+        entryExists = fs.existsSync(entryPath);
+      } catch {
+        entryExists = false;
+      }
+    }
+
+    if (entryExists) {
+      try {
+        nodeRequire(entryPath);
+        loaded = true;
+      } catch (loadError) {
+        error = loadError && loadError.message ? loadError.message : String(loadError);
+      }
+    } else {
+      error = `entry file not present: ${entryPath || "(package not resolved)"}`;
+    }
+
+    products[product] = { entryPath, entryExists, loaded, error };
+  }
 
   return {
     resolved,
@@ -247,6 +304,10 @@ function describeResolution() {
     searchedDirs,
     dirsThatExist,
     adminPresent: resolved !== null,
+    packageRoot,
+    rootEntries: readEntries(packageRoot),
+    libEntries: readEntries(packageRoot ? path.join(packageRoot, "lib") : null),
+    products,
   };
 }
 

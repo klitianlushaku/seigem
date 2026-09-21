@@ -53,6 +53,18 @@ export interface ConfigurationReport {
     resolved: string | null;
     cwd: string;
     moduleDirsFound: string[];
+    packageRoot: string | null;
+    rootEntries: string[] | null;
+    libEntries: string[] | null;
+    products: Record<
+      string,
+      {
+        entryPath: string;
+        entryExists: boolean;
+        loaded: boolean;
+        error: string | null;
+      }
+    >;
   };
 }
 
@@ -97,15 +109,20 @@ export function inspectConfiguration(): ConfigurationReport {
     problems,
   };
 
-  // Ask the loader where it thinks the Admin SDK is. This never throws and
-  // never loads the SDK, so it is safe to call from an unauthenticated probe.
+  // Ask the loader where it thinks the Admin SDK is. This never throws, and it
+  // reports both the resolution outcome and any load error per product, so a
+  // deployment problem is visible here instead of only as a generic 500.
   const resolution = describeResolution();
   const adminSdk = {
-    ok: resolution.adminPresent,
+    ok: resolution.adminPresent && resolution.products.auth?.loaded === true,
     resolved: resolution.resolved,
     cwd: resolution.cwd,
     // Only the directories that actually exist, to keep the response small.
     moduleDirsFound: resolution.dirsThatExist,
+    packageRoot: resolution.packageRoot,
+    rootEntries: resolution.rootEntries,
+    libEntries: resolution.libEntries,
+    products: resolution.products,
   };
 
   return {
