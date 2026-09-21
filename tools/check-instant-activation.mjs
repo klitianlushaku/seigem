@@ -100,6 +100,42 @@ function check(label, condition, detail = "") {
 
 console.log(`Target: ${baseUrl}\n`);
 
+/*
+ * SELF-HEALING, AND WHY IT IS NECESSARY.
+ *
+ * This tool mutates a REAL account: it clears the plan to create the "paid but
+ * not yet activated" state, then relies on reaching the end to put it back. That
+ * is unsafe. A production run was killed part-way through — its output was being
+ * piped into something that stopped reading — and the account was left on the
+ * free plan. The customer noticed before the tooling did.
+ *
+ * So the original values are written to the document under a marker BEFORE
+ * anything is changed, and this sweep restores them at the start of every run.
+ * A killed run therefore heals on the next invocation rather than staying broken.
+ */
+const BACKUP_FIELD = "_activationTestBackup";
+
+const usersSnapshot = await db.collection("users").get();
+for (const doc of usersSnapshot.docs) {
+  const backup = doc.data()[BACKUP_FIELD];
+  if (!backup) continue;
+
+  await doc.ref.set(
+    {
+      plan: backup.plan,
+      planExpiresAt: backup.planExpiresAt ?? null,
+      cancelAtPeriodEnd: backup.cancelAtPeriodEnd ?? false,
+      whopSubscriptionId: backup.whopSubscriptionId ?? null,
+      [BACKUP_FIELD]: adminFirestore.FieldValue.delete(),
+    },
+    { merge: true },
+  );
+
+  console.log(
+    `Restored ${doc.id} from an interrupted run: plan back to "${backup.plan}".`,
+  );
+}
+
 // --- Find an account that is owed access at Whop -----------------------------
 /*
  * Any account holding a membership whose metadata names it. Those are the real
@@ -153,8 +189,46 @@ const before = await planOf(uid);
 
 // --- Simulate "paid, but not yet activated" ---------------------------------
 console.log("--- simulating a buyer who has paid but has no plan yet");
-await db.collection("users").doc(uid).set({ plan: "free" }, { merge: true });
+
+/*
+ * The exact stored state is backed up FIRST, under a marker that the sweep at
+ * the top of this file knows how to restore. Everything below is wrapped in
+ * try/finally so an ordinary failure still puts the account back; the marker
+ * covers the case where the process is killed outright.
+ */
+const backupDocument = await db.collection("users").doc(uid).get();
+const backupData = backupDocument.data() ?? {};
+
+await db.collection("users").doc(uid).set(
+  {
+    plan: "free",
+    [BACKUP_FIELD]: {
+      plan: backupData.plan ?? "free",
+      planExpiresAt: backupData.planExpiresAt ?? null,
+      cancelAtPeriodEnd: backupData.cancelAtPeriodEnd ?? false,
+      whopSubscriptionId: backupData.whopSubscriptionId ?? null,
+    },
+  },
+  { merge: true },
+);
+
 check("the plan was cleared, as it is before the webhook lands", (await planOf(uid)).plan === "free");
+
+/** Puts the account back and removes the marker. Safe to call twice. */
+async function restoreAccount() {
+  await db.collection("users").doc(uid).set(
+    {
+      plan: backupData.plan ?? "free",
+      planExpiresAt: backupData.planExpiresAt ?? null,
+      cancelAtPeriodEnd: backupData.cancelAtPeriodEnd ?? false,
+      whopSubscriptionId: backupData.whopSubscriptionId ?? null,
+      [BACKUP_FIELD]: adminFirestore.FieldValue.delete(),
+    },
+    { merge: true },
+  );
+}
+
+try {
 
 // --- The call the returning buyer makes -------------------------------------
 console.log("\n--- timing /api/billing/verify");
@@ -206,19 +280,40 @@ check("the plan is unchanged by the repeat", (await planOf(uid)).plan === after.
 console.log("\n--- unauthenticated");
 const anon = await fetch(`${baseUrl}/api/billing/verify`, { method: "POST" });
 check("verification requires a signed-in user", anon.status === 401, `HTTP ${anon.status}`);
+} finally {
+  /*
+   * Always put the account back, whatever happened above — a failed check, a
+   * thrown error, a network fault. The marker written before the simulation
+   * covers the one case this cannot: the process being killed outright.
+   */
+  await restoreAccount().catch((error) => {
+    console.error(
+      "\nCOULD NOT RESTORE THE ACCOUNT — restore it manually:\n" +
+        `  uid ${uid}, plan "${backupData.plan ?? "free"}"\n`,
+      error,
+    );
+  });
+}
 
 // --- Restore ----------------------------------------------------------------
 /*
- * The account was only ever tweaked to create the "not yet activated" state, and
- * verification put it right. This asserts that, rather than assuming it.
+ * The account was only ever tweaked to create the "not yet activated" state.
+ * Verification put the PLAN right, but not every other field the simulation
+ * touched, so the exact original values are restored here rather than assumed.
  */
-console.log("\n--- final state");
+console.log("\n--- restoring the account");
+await restoreAccount();
+
 const final = await planOf(uid);
 console.log(`        plan=${final.plan} sub=${final.sub}`);
 check(
   `the account matches its state before the test ("${before.plan}")`,
   final.plan === before.plan,
   `expected ${before.plan}, got ${final.plan}`,
+);
+check(
+  "the backup marker is cleared",
+  !(await db.collection("users").doc(uid).get()).data()?.[BACKUP_FIELD],
 );
 
 if (adminToken) {
