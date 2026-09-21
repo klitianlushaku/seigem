@@ -53,18 +53,28 @@ try {
   process.exit(1);
 }
 
-for (const name of ["getAdminApp", "getAdminAuth", "getAdminDb", "Timestamp", "FieldValue"]) {
+for (const name of ["getAdminApp", "getAdminAuth", "getAdminDb"]) {
   if (typeof loader[name] !== "function") {
     console.error(`FAIL  loader does not export "${name}" as a function`);
     failures += 1;
   }
 }
 
-// --- 2. Real Admin calls, proving resolution works at runtime --------------
+// --- 2. The sentinels must behave like the real classes ---------------------
+// This exact check would have caught the production 500: the Timestamp Proxy
+// used `class {}` as its target, whose non-writable `prototype` made the get
+// trap violate a Proxy invariant, so `value instanceof Timestamp` threw and
+// every history request from a user WITH saved sets returned 500.
+for (const name of ["Timestamp", "FieldValue"]) {
+  if (loader[name] === undefined) {
+    console.error(`FAIL  loader does not export "${name}"`);
+    failures += 1;
+  }
+}
+
+/** Real Admin calls, proving resolution works at runtime. */
 const env = loadEnv();
 try {
-  // Initializing proves the credential object is accepted; the instance itself
-  // is not needed afterwards because the loader caches it internally.
   loader.getAdminApp({
     projectId: env.FIREBASE_PROJECT_ID,
     clientEmail: env.FIREBASE_CLIENT_EMAIL,
@@ -78,14 +88,38 @@ try {
   console.log("PASS  Firestore via loader");
 
   // A real write path uses these sentinels, so confirm they resolve.
-  const stamp = loader.Timestamp().now();
+  const stamp = loader.Timestamp.now();
   if (typeof stamp.toDate !== "function") throw new Error("Timestamp.now() is not a Timestamp");
-  console.log("PASS  Timestamp sentinel resolves");
+  console.log("PASS  Timestamp.now() returns a Timestamp");
 
-  if (typeof loader.FieldValue().serverTimestamp !== "function") {
+  // THE regression: history mapping does `value instanceof Timestamp`. A Proxy
+  // whose target has a non-writable prototype throws here instead.
+  if (!(stamp instanceof loader.Timestamp)) {
+    throw new Error("value instanceof Timestamp is false");
+  }
+  console.log("PASS  value instanceof Timestamp");
+
+  if (stamp instanceof loader.FieldValue) {
+    throw new Error("a Timestamp must not be an instance of FieldValue");
+  }
+  console.log("PASS  instanceof is not trivially true for unrelated values");
+
+  const fromDate = loader.Timestamp.fromDate(new Date(0));
+  if (!(fromDate instanceof loader.Timestamp)) {
+    throw new Error("Timestamp.fromDate result fails instanceof");
+  }
+  console.log("PASS  Timestamp.fromDate works");
+
+  const constructed = new loader.Timestamp(0, 0);
+  if (!(constructed instanceof loader.Timestamp)) {
+    throw new Error("new Timestamp(...) fails instanceof");
+  }
+  console.log("PASS  new Timestamp(...) works");
+
+  if (typeof loader.FieldValue.serverTimestamp !== "function") {
     throw new Error("FieldValue.serverTimestamp is missing");
   }
-  console.log("PASS  FieldValue sentinel resolves");
+  console.log("PASS  FieldValue.serverTimestamp resolves");
 } catch (error) {
   failures += 1;
   console.error(`FAIL  live Admin call: ${error.message}`);

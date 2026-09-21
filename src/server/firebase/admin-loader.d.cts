@@ -34,11 +34,17 @@ export function getAdminAuth(credentials: AdminCredentials): Auth;
 /** Firebase Admin Firestore, bound to the singleton app. */
 export function getAdminDb(credentials: AdminCredentials): Firestore;
 
-/** Returns the Firestore Timestamp class. Lazy, so import never loads the SDK. */
-export function Timestamp(): typeof FirestoreTimestamp;
+/**
+ * Firestore Timestamp class, resolved lazily.
+ *
+ * A Proxy, so importing this module never loads the SDK. It supports
+ * `Timestamp.now()`, `Timestamp.fromDate(...)`, `new Timestamp(...)` and
+ * `value instanceof Timestamp`.
+ */
+export const Timestamp: typeof FirestoreTimestamp;
 
-/** Returns the Firestore FieldValue sentinel. Lazy for the same reason. */
-export function FieldValue(): typeof FirestoreFieldValue;
+/** Firestore FieldValue sentinel, resolved lazily for the same reason. */
+export const FieldValue: typeof FirestoreFieldValue;
 
 /** Resolution diagnostics for /api/health. Paths and booleans only. */
 export function describeResolution(): {

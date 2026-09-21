@@ -400,12 +400,67 @@ function getAdminDb(credentials) {
   return load().firestore.getFirestore(getAdminApp(credentials));
 }
 
+/**
+ * Firestore `Timestamp` class, resolved lazily.
+ *
+ * Resolved on access rather than at import time, because Next.js evaluates
+ * route modules while collecting page data during the build, and that sandbox
+ * cannot resolve firebase-admin. A build that never queries Firestore should not
+ * need the SDK at all.
+ *
+ * WHY THE PROXY TARGET IS A PLAIN FUNCTION AND NOT `class {}`:
+ *
+ * A class's `prototype` is a non-configurable, NON-WRITABLE own property, and a
+ * Proxy get trap must return exactly that value for such a property. Returning
+ * the real class's prototype — which this trap must do for `instanceof` to work
+ * — violates the invariant and throws:
+ *
+ *   TypeError: 'get' on proxy: property 'prototype' is a read-only and
+ *   non-configurable data property on the proxy target but the proxy did not
+ *   return its actual value
+ *
+ * That surfaced as HTTP 500 from /api/study-sets for any user who had saved
+ * study sets, because the history mapping calls `value instanceof Timestamp`.
+ * An account with no sets never ran that code, so the failure looked
+ * user-specific and was easy to misread as a data problem.
+ *
+ * A plain function's `prototype` is writable, so the invariant does not apply.
+ * Functions are returned bound so `Timestamp.now()` and `Symbol.hasInstance`
+ * receive the real class as `this` rather than this Proxy.
+ */
+const Timestamp = new Proxy(
+  function TimestampPlaceholder() {},
+  {
+    construct: (_target, args) => {
+      const Real = load().firestore.Timestamp;
+      return new Real(...args);
+    },
+    get: (_target, property) => {
+      const Real = load().firestore.Timestamp;
+      const value = Real[property];
+      return typeof value === "function" ? value.bind(Real) : value;
+    },
+  },
+);
+
+/** Firestore `FieldValue` sentinel, resolved lazily for the same reason. */
+const FieldValue = new Proxy(
+  function FieldValuePlaceholder() {},
+  {
+    get: (_target, property) => {
+      const Real = load().firestore.FieldValue;
+      const value = Real[property];
+      return typeof value === "function" ? value.bind(Real) : value;
+    },
+  },
+);
+
 module.exports = {
   getAdminApp,
   getAdminAuth,
   getAdminDb,
-  Timestamp: () => load().firestore.Timestamp,
-  FieldValue: () => load().firestore.FieldValue,
+  Timestamp,
+  FieldValue,
   /**
    * Diagnostics for /api/health. Reports the resolution outcome and the
    * directories that exist, without loading the SDK or throwing. Paths and

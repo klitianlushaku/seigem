@@ -15,46 +15,17 @@ import {
   getAdminApp as loadAdminApp,
   getAdminAuth as loadAdminAuth,
   getAdminDb as loadAdminDb,
-  Timestamp as getTimestamp,
-  FieldValue as getFieldValue,
 } from "./admin-loader.cjs";
 
 /**
- * Firestore `Timestamp` class.
+ * Firestore `Timestamp` and `FieldValue`, re-exported from the loader.
  *
- * Resolved through a getter rather than re-exported directly, because reading it
- * at MODULE LOAD time would force the Admin SDK to load while Next.js collects
- * page data during the build. That build sandbox resolves packages differently
- * from the deployed runtime and fails with "Cannot find module 'firebase-admin'"
- * — and a build that never queries Firestore should not need the SDK at all.
- *
- * Callers use it as `Timestamp.now()` / `Timestamp.fromDate(...)`, so exposing
- * the class itself keeps existing call sites unchanged.
+ * The loader owns them so the lazy-resolution and Proxy invariants live in one
+ * testable CommonJS module. A live re-export keeps them lazy: nothing is
+ * evaluated until a caller actually touches `Timestamp` or `FieldValue`, which
+ * is what keeps the SDK out of the build-time module graph.
  */
-export const Timestamp = new Proxy(
-  class {},
-  {
-    construct: (_target, args: unknown[]) => {
-      const Real = getTimestamp() as unknown as new (...a: unknown[]) => object;
-      return new Real(...args);
-    },
-    get: (_target, property) => {
-      const Real = getTimestamp() as unknown as Record<string | symbol, unknown>;
-      return Real[property];
-    },
-  },
-) as unknown as typeof import("firebase-admin/firestore").Timestamp;
-
-/** Firestore `FieldValue` sentinel, lazily resolved for the same reason. */
-export const FieldValue = new Proxy(
-  {},
-  {
-    get: (_target, property) => {
-      const Real = getFieldValue() as unknown as Record<string | symbol, unknown>;
-      return Real[property];
-    },
-  },
-) as unknown as typeof import("firebase-admin/firestore").FieldValue;
+export { FieldValue, Timestamp } from "./admin-loader.cjs";
 
 /** The Admin app type, taken from the loader so it stays in sync. */
 type AdminApp = ReturnType<typeof loadAdminApp>;
