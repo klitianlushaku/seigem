@@ -36,6 +36,25 @@ export interface CreatedCheckout {
 }
 
 /**
+ * Extracts Whop's error message from a failed response body.
+ *
+ * Whop returns `{ "error": { "type": "...", "message": "..." } }`. The message
+ * is a safe, diagnostic string such as "Company API key is not authorized for
+ * the checkout_configuration:create scope." It contains no credential, and it
+ * is the single most useful thing to know when a checkout cannot be created.
+ *
+ * @param payload Parsed response body, or null when it was not JSON.
+ * @returns The message, or null when none could be read.
+ */
+function whopErrorMessage(payload: Record<string, unknown> | null): string | null {
+  const error = payload?.error;
+  if (typeof error !== "object" || error === null) return null;
+
+  const message = (error as Record<string, unknown>).message;
+  return typeof message === "string" && message.trim() ? message.trim() : null;
+}
+
+/**
  * Creates a Whop checkout configuration carrying the buyer's account id.
  *
  * @throws {ApiError} `internal_error` when Whop is unreachable, rejects the
@@ -84,9 +103,33 @@ export async function createCheckoutConfiguration(input: {
     | null;
 
   if (!response.ok) {
+    // Surface Whop's own error message. It names the actual problem — most
+    // often a missing API-key permission — and carries no secret. Logging only
+    // the status made a 403 look identical to a transient outage, which sent
+    // debugging in the wrong direction entirely.
+    const whopError = whopErrorMessage(payload);
+
     console.error(
-      `[billing] checkout configuration rejected with HTTP ${response.status}`,
+      `[billing] checkout configuration rejected with HTTP ${response.status}` +
+        (whopError ? `: ${whopError}` : ""),
     );
+
+    // 401/403 are configuration faults: retrying can never succeed, so say so
+    // rather than inviting the customer to try again forever.
+    if (response.status === 401 || response.status === 403) {
+      console.error(
+        "[billing] The Whop API key lacks the permissions needed to create a " +
+          "checkout. It requires: checkout_configuration:create, plan:create, " +
+          "access_pass:create, access_pass:update, " +
+          "checkout_configuration:basic:read. Grant them in the Whop " +
+          "dashboard under Developer -> API keys, then redeploy.",
+      );
+      throw new ApiError(
+        "internal_error",
+        "Pagesat nuk janë konfiguruar ende. Provo përsëri më vonë.",
+      );
+    }
+
     throw new ApiError(
       "internal_error",
       "Nuk mund të nisim pagesën. Provo përsëri më vonë.",
