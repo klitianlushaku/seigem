@@ -34,7 +34,8 @@
     "test:study": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/study.test.ts",
     "test:security": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/security.test.ts",
     "test:dashboard": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/dashboard-render.test.tsx",
-    "test:summary": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/summary.test.ts"
+    "test:summary": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/summary.test.ts",
+    "test:whop-webhook": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/whop-webhook.test.ts"
   },
   "dependencies": {
     "firebase": "^12.19.0",

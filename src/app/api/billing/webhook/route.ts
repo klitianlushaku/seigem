@@ -25,7 +25,7 @@ import {
   readSubscription,
   resolveEntitlement,
 } from "@/lib/billing";
-import { planForWhopProduct } from "@/lib/env/server";
+import { planForWhopProduct, warnOnWhopMisconfiguration } from "@/lib/env/server";
 import { verifyWhopWebhook } from "@/server/billing/webhook";
 import {
   applySubscriptionUpdate,
@@ -63,6 +63,10 @@ function eventNameFrom(payload: unknown): string | null {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // Surface a wrong product/plan id immediately: it otherwise shows up only as
+  // "the customer paid and nothing happened".
+  warnOnWhopMisconfiguration("webhook");
+
   // The raw text is required for signature verification.
   let rawBody: string;
   try {

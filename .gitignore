@@ -39,6 +39,11 @@ yarn-error.log*
 .env*
 !.env.example
 
+# Working copies of real credentials prepared for pasting into a host's
+# environment-variable UI. These hold LIVE secrets, so they must stay local.
+vercel.env.txt
+*.env.txt
+
 # Firebase service account keys and any other credential material.
 serviceAccountKey*.json
 *-service-account*.json

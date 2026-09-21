@@ -373,8 +373,13 @@ describe("server-side enforcement", () => {
         const source = readFileSync(full, "utf8");
         // Look for the plan limit numbers used as literals alongside a metric
         // name, which would indicate a duplicated limit rather than config.
+        //
+        // The match excludes numbers joined to a preceding "/" (Tailwind opacity
+        // utilities such as `border-danger/50`) or to a word character, because
+        // those are CSS class names, not plan limits. Without that exclusion the
+        // check reports a false positive on any component using such a class.
         if (
-          /\b(200|50)\b/.test(source) &&
+          /(?<![\w/])(200|50)(?![\w/])/.test(source) &&
           /flashcardsPerDay|quizQuestionsPerDay|documentsPerDay/.test(source)
         ) {
           offenders.push(normalized);

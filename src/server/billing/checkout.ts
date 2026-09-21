@@ -21,7 +21,7 @@ import {
   absoluteCheckoutUrl,
   buildCheckoutConfigurationBody,
 } from "@/lib/billing";
-import { serverEnv } from "@/lib/env/server";
+import { serverEnv, warnOnWhopMisconfiguration } from "@/lib/env/server";
 import { ApiError } from "@/server/http/errors";
 
 /** Request timeout. A payment hand-off must not hang the user's click. */
@@ -49,6 +49,8 @@ export async function createCheckoutConfiguration(input: {
   uid: string;
   redirectUrl: string | null;
 }): Promise<CreatedCheckout> {
+  warnOnWhopMisconfiguration("checkout");
+
   const endpoint = `${serverEnv.whopBaseUrl.replace(/\/+$/, "")}/checkout_configurations`;
 
   const controller = new AbortController();

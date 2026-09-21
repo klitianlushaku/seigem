@@ -37,12 +37,33 @@ export async function requireUser(request: NextRequest): Promise<DecodedIdToken>
     throw new ApiError("unauthenticated");
   }
 
+  let auth;
+  try {
+    auth = getAdminAuth();
+  } catch (error) {
+    // Building the Admin app failed, which means the server credentials are
+    // missing or malformed — NOT that the user's token is bad. Reported as a
+    // configuration failure so the client shows "server error" rather than
+    // "please sign in", which would send the user round an infinite login loop.
+    console.error(
+      "[auth] Firebase Admin SDK is not configured. Check FIREBASE_PROJECT_ID, " +
+        "FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY. Cause:",
+      error,
+    );
+    throw new ApiError(
+      "internal_error",
+      "Shërbimi nuk është konfiguruar saktë. Provo përsëri më vonë.",
+    );
+  }
+
   try {
     // checkRevoked: true rejects tokens for disabled/deleted users and
     // sessions revoked via the Firebase console.
-    return await getAdminAuth().verifyIdToken(token, true);
+    return await auth.verifyIdToken(token, true);
   } catch (error) {
-    // Log the real reason server-side; never surface it to the client.
+    // Distinguish "our clock/credentials are wrong" from "this token is bad".
+    // Firebase reports both as credential errors, but only one of them is the
+    // user's problem, and an hour of skew silently invalidates EVERY token.
     console.error("[auth] ID token verification failed:", error);
     throw new ApiError("unauthenticated");
   }

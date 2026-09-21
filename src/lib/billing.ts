@@ -23,9 +23,22 @@ const ACTIVE_STATUSES: readonly string[] = ["active", "trialing", "canceling"];
 /**
  * Whop webhook event names that concern Seigem.
  *
- * Whop emits `membership.*` events for subscription lifecycle changes. The
- * lowercase comparison in `classifyEvent` tolerates the exact casing Whop uses
- * and any future aliases, rather than pinning to one spelling.
+ * VERIFIED against Whop's OpenAPI spec (`/openapi/api-v1-stable.json`), which
+ * defines exactly these membership and payment hooks:
+ *
+ *   membership.activated
+ *   membership.deactivated
+ *   membership.cancel_at_period_end_changed
+ *   membership.trial_ending_soon
+ *   payment.authorized / created / pending / succeeded / failed / canceled
+ *   payment.requires_action
+ *
+ * NOTE: there is NO `membership.canceled`, `membership.expired` or
+ * `membership.updated` hook. Whop reports cancellation through
+ * `membership.cancel_at_period_end_changed` (a SCHEDULED cancellation, which
+ * must NOT revoke access immediately) and revocation through
+ * `membership.deactivated`. The lists below are kept deliberately permissive so
+ * that a future Whop event name is still handled rather than silently dropped.
  */
 export const BILLING_EVENT_KINDS = [
   "membership_activated",
@@ -34,6 +47,7 @@ export const BILLING_EVENT_KINDS = [
   "membership_cancelled",
   "membership_expired",
   "membership_deactivated",
+  "membership_cancel_at_period_end_changed",
   "payment_succeeded",
   "payment_failed",
 ] as const;
@@ -191,10 +205,20 @@ function normalizeEventName(name: string): string {
  * @returns "grant" for activation-like events, "revoke" for termination-like
  *   events, or null when the event is not billing-related.
  *
- * ORDER MATTERS: revocation is checked FIRST. "membership_deactivated" contains
- * the substring "activated", so testing for activation first would classify a
- * deactivation as a grant — accidentally giving away paid access. The same trap
- * applies to "deactivated", "inactivated", and "reactivation_cancelled".
+ * ORDER MATTERS, in two ways:
+ *
+ *  1. "cancel_at_period_end_changed" is handled FIRST and returns null. Whop
+ *     sends it when a customer merely SCHEDULES a cancellation — they have paid
+ *     through the end of the period and must keep access until then. The name
+ *     contains "cancel", so letting it reach the revocation branch would cut a
+ *     paying customer off the moment they clicked "cancel", which is both wrong
+ *     and a refund magnet. The handler keeps the current plan and records the
+ *     end date instead.
+ *
+ *  2. Revocation is checked BEFORE activation. "membership_deactivated"
+ *     contains the substring "activated", so testing for activation first would
+ *     classify a deactivation as a grant — accidentally giving away paid
+ *     access. The same trap applies to "deactivated" and "inactivated".
  */
 export function classifyEvent(
   eventName: string | null | undefined,
@@ -202,7 +226,13 @@ export function classifyEvent(
   if (!eventName) return null;
   const name = normalizeEventName(eventName);
 
-  // --- Revocation first (see ORDER MATTERS above) ----------------------
+  // --- Scheduled cancellation: neither grant nor revoke -----------------
+  // Must precede the revocation block below, which matches "cancel".
+  if (name.includes("cancel_at_period_end")) {
+    return null;
+  }
+
+  // --- Revocation (see ORDER MATTERS above) ----------------------------
   if (
     name.includes("deactivated") ||
     name.includes("inactivated") ||
