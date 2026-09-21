@@ -23,11 +23,16 @@ export interface AdminCredentials {
 /** Returns the singleton Admin app, initializing it on first use. */
 export function getAdminApp(credentials: AdminCredentials): App;
 
-/** Firebase Admin Auth, bound to the singleton app. */
-export function getAdminAuth(): Auth;
+/**
+ * Firebase Admin Auth, bound to the singleton app.
+ *
+ * Credentials are required on the first call in the process; the loader caches
+ * the app from then on.
+ */
+export function getAdminAuth(credentials: AdminCredentials): Auth;
 
 /** Firebase Admin Firestore, bound to the singleton app. */
-export function getAdminDb(): Firestore;
+export function getAdminDb(credentials: AdminCredentials): Firestore;
 
 /** Returns the Firestore Timestamp class. Lazy, so import never loads the SDK. */
 export function Timestamp(): typeof FirestoreTimestamp;

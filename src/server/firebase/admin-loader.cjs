@@ -56,10 +56,25 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 /**
- * `require` rooted at this file, so package resolution starts from the
- * application directory rather than from an internal bundler helper.
+ * `require` rooted at a RUNTIME path, never at `__filename`.
+ *
+ * `__filename` must not be used here. The bundler inlines this file and
+ * replaces `__filename` with a BUILD-TIME literal — Turbopack emits
+ * `createRequire("/ROOT/src/server/firebase/admin-loader.cjs")`, and `/ROOT`
+ * does not exist on the deployed host. `require.resolve("firebase-admin")` then
+ * throws, `getAdminAuth()` fails, and every authenticated request returns 500
+ * with "the service is not configured correctly".
+ *
+ * That is exactly why the bug did not reproduce locally: on the build machine
+ * the literal resolves to a real directory, so the failure only appeared in
+ * production.
+ *
+ * `process.cwd()` is evaluated at runtime instead. On Vercel the function's
+ * working directory is the deployment root (`/var/task`), which contains
+ * `node_modules`. The upward walk in `resolveAdminMain` covers any layout where
+ * it does not.
  */
-const nodeRequire = createRequire(__filename);
+const nodeRequire = createRequire(path.join(process.cwd(), "noop.js"));
 
 /**
  * Resolves the absolute path of a firebase-admin product entry point.
@@ -88,36 +103,41 @@ function entryFor(product) {
 /**
  * Resolves the firebase-admin main file.
  *
- * Tolerates the BUILD-TIME environment. Next.js evaluates route modules while
- * collecting page data, and that sandbox runs from a virtual `/ROOT/` where
- * `node_modules` is not reachable from the module's own path — so resolution
- * must not be attempted, let alone required to succeed, during a build.
+ * Two strategies, in order:
+ *
+ *   1. `require.resolve`, which is correct at runtime.
+ *   2. An upward filesystem walk from the RUNTIME working directory.
+ *
+ * Both avoid `__dirname` and `__filename`: the bundler rewrites those to
+ * build-time literals (`/ROOT/...`) that do not exist on the deployed host.
  *
  * @returns {string | null} Absolute path to firebase-admin's main entry, or
- *   null when no installed copy can be found (a build sandbox).
+ *   null when no installed copy can be found (for example during a build).
  */
 function resolveAdminMain() {
   try {
-    return nodeRequire.resolve("firebase-admin");
+    const resolved = nodeRequire.resolve("firebase-admin");
+    if (fs.existsSync(resolved)) return resolved;
   } catch {
-    // Fall back to a filesystem walk, which also covers sandboxes where
-    // `require.resolve` paths are restricted but the files are present.
-    let dir = __dirname;
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = path.join(dir, "node_modules", "firebase-admin", "lib", "index.js");
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-        // Keep walking up.
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-
-    // Nothing found: assume a build sandbox and defer to runtime.
-    return null;
+    // Fall through to the filesystem walk.
   }
+
+  // Walk up from the runtime working directory. On Vercel this is the
+  // deployment root (/var/task), which holds node_modules.
+  let dir = process.cwd();
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = path.join(dir, "node_modules", "firebase-admin", "lib", "index.js");
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // Keep walking up.
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return null;
 }
 
 /**
@@ -152,10 +172,21 @@ let cachedApp = null;
  * Returns the singleton Firebase Admin app, creating it on first use.
  *
  * @param {{ projectId: string, clientEmail: string, privateKey: string }} credentials
+ *   Required on the FIRST call. Later calls may pass them again; they are
+ *   ignored once the app is cached.
  * @returns {any} The initialized Admin app.
  */
 function getAdminApp(credentials) {
   if (cachedApp) return cachedApp;
+
+  if (!credentials) {
+    // Fail with an actionable message rather than the opaque
+    // "Cannot read properties of undefined (reading 'projectId')".
+    throw new Error(
+      "getAdminApp requires credentials on first use " +
+        "({ projectId, clientEmail, privateKey }).",
+    );
+  }
 
   const adminApp = load().app;
 
@@ -176,14 +207,26 @@ function getAdminApp(credentials) {
   return cachedApp;
 }
 
-/** @returns {any} Firebase Admin Auth, bound to the singleton app. */
-function getAdminAuth() {
-  return load().auth.getAuth(getAdminApp());
+/**
+ * Firebase Admin Auth, bound to the singleton app.
+ *
+ * @param {{ projectId: string, clientEmail: string, privateKey: string }} credentials
+ *   Required on the first call in the process; see getAdminApp.
+ * @returns {any}
+ */
+function getAdminAuth(credentials) {
+  return load().auth.getAuth(getAdminApp(credentials));
 }
 
-/** @returns {any} Firebase Admin Firestore, bound to the singleton app. */
-function getAdminDb() {
-  return load().firestore.getFirestore(getAdminApp());
+/**
+ * Firebase Admin Firestore, bound to the singleton app.
+ *
+ * @param {{ projectId: string, clientEmail: string, privateKey: string }} credentials
+ *   Required on the first call in the process; see getAdminApp.
+ * @returns {any}
+ */
+function getAdminDb(credentials) {
+  return load().firestore.getFirestore(getAdminApp(credentials));
 }
 
 module.exports = {

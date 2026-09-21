@@ -73,24 +73,43 @@ export function hasAdminCredentials(): boolean {
 }
 
 /**
- * Returns the singleton Firebase Admin app, creating it on first use.
- * Reuses an existing app so hot reloads do not re-initialize the SDK.
+ * Reads the Admin credentials from the validated server environment.
+ *
+ * Kept in one place so every entry point initialises the app identically. The
+ * loader itself cannot read these: it is plain CommonJS that deliberately does
+ * not import application modules, so the values are passed in.
  */
-export function getAdminApp(): AdminApp {
-  return loadAdminApp({
+function adminCredentials() {
+  return {
     projectId: serverEnv.firebaseProjectId,
     clientEmail: serverEnv.firebaseClientEmail,
     // Newlines were restored from the literal "\n" escapes by lib/env/server.
     privateKey: serverEnv.firebasePrivateKey,
-  });
+  };
 }
 
-/** Firebase Admin Auth instance. Used to verify ID tokens. */
+/**
+ * Returns the singleton Firebase Admin app, creating it on first use.
+ * Reuses an existing app so hot reloads do not re-initialize the SDK.
+ */
+export function getAdminApp(): AdminApp {
+  return loadAdminApp(adminCredentials());
+}
+
+/**
+ * Firebase Admin Auth instance. Used to verify ID tokens.
+ *
+ * Credentials are passed on every call, not just the first: the loader caches
+ * the app internally, but it needs the values the FIRST time it is reached.
+ * Omitting them here previously threw
+ * `TypeError: Cannot read properties of undefined (reading 'projectId')`, which
+ * auth-guard surfaced as a 500 on every authenticated request.
+ */
 export function getAdminAuth(): AdminAuth {
-  return loadAdminAuth();
+  return loadAdminAuth(adminCredentials());
 }
 
 /** Firebase Admin Firestore instance. Bypasses security rules — use carefully. */
 export function getAdminDb(): AdminFirestore {
-  return loadAdminDb();
+  return loadAdminDb(adminCredentials());
 }
