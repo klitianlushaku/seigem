@@ -14,9 +14,31 @@ import { Webhook } from "standardwebhooks";
 
 // The webhook module is server-only; load it with the guard neutralised.
 const { loadModule } = await import("./helpers/load-server-module.mjs");
-const { verifyWhopWebhook, signWhopPayload } = await loadModule(
-  "src/server/billing/webhook.ts",
-);
+const { verifyWhopWebhook, signWhopPayload } =
+  await loadModule("src/server/billing/webhook.ts");
+
+const { createHmac } = await import("node:crypto");
+
+/**
+ * Signs exactly the way WHOP's BACKEND does.
+ *
+ * Whop signs `{webhook-id}.{webhook-timestamp}.{raw body}` with HMAC-SHA256,
+ * using the LITERAL BYTES of the `ws_...` secret, and base64-encodes the digest.
+ *
+ * This is deliberately an independent implementation, written from Whop's
+ * documented algorithm rather than through `standardwebhooks`. A sign/verify
+ * round trip inside that library cannot detect a wrong key derivation, because
+ * both sides would be wrong identically.
+ *
+ * @param secret    The raw `ws_...` secret.
+ * @param messageId Value for the `webhook-id` header.
+ * @param timestamp Unix seconds, as the header carries.
+ * @param payload   The exact request body.
+ */
+function whopSignLikeBackend(secret, messageId, timestamp, payload) {
+  const signed = `${messageId}.${timestamp}.${payload}`;
+  return createHmac("sha256", secret).update(signed).digest("base64");
+}
 
 // The test secret must match what the loader injects into process.env.
 //
@@ -53,6 +75,100 @@ const PAYLOAD = JSON.stringify({
     product_id: "prod_plus",
     status: "active",
   },
+});
+
+// ===========================================================================
+// Compatibility with Whop's OWN signing algorithm
+// ===========================================================================
+describe("Whop backend signature algorithm", () => {
+  /**
+   * The failure this guards is silent and expensive.
+   *
+   * Whop signs with the LITERAL BYTES of its `ws_...` secret, but the
+   * `standardwebhooks` library base64-DECODES whatever it is given. Passing the
+   * secret through raw therefore derives a different key — and because `_` is
+   * not a base64 character, the constructor throws
+   * "Base64Coder: incorrect characters for decoding" before any request is
+   * looked at. The endpoint answered 500 and NO webhook could ever be applied,
+   * so a customer could pay and never receive their plan.
+   *
+   * A sign/verify round trip through the same library cannot catch that: both
+   * sides would be wrong in the same way. These tests therefore compute the
+   * signature with an INDEPENDENT implementation of Whop's documented
+   * algorithm, using node:crypto directly.
+   */
+  const messageId = "msg_whop_compat";
+  const timestamp = new Date();
+  const unixSeconds = Math.floor(timestamp.getTime() / 1000);
+
+  /** Builds headers carrying a raw Whop-style signature. */
+  function backendSignedHeaders() {
+    const signature = whopSignLikeBackend(
+      TEST_SECRET,
+      messageId,
+      unixSeconds,
+      PAYLOAD,
+    );
+    return new Headers({
+      "webhook-id": messageId,
+      "webhook-timestamp": String(unixSeconds),
+      "webhook-signature": `v1,${signature}`,
+    });
+  }
+
+  it("ACCEPTS a signature produced the way Whop's backend produces it", () => {
+    const result = verifyWhopWebhook(PAYLOAD, backendSignedHeaders());
+    assert.equal(
+      result.ok,
+      true,
+      "a genuine Whop signature must verify; a failure here means " +
+        "customers pay and never receive their plan",
+    );
+  });
+
+  it("rejects that signature when the body is altered", () => {
+    const result = verifyWhopWebhook(
+      PAYLOAD.replace("prod_plus", "prod_pro"),
+      backendSignedHeaders(),
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 401);
+  });
+
+  it("rejects a signature made with a different secret", () => {
+    const signature = whopSignLikeBackend(
+      "ws_0000000000000000000000000000000000000000000000000000000000000000",
+      messageId,
+      unixSeconds,
+      PAYLOAD,
+    );
+    const headers = new Headers({
+      "webhook-id": messageId,
+      "webhook-timestamp": String(unixSeconds),
+      "webhook-signature": `v1,${signature}`,
+    });
+    assert.equal(verifyWhopWebhook(PAYLOAD, headers).ok, false);
+  });
+
+  it("the production signing helper agrees with the backend algorithm", () => {
+    // Guards against the two drifting apart again.
+    const ours = signWhopPayload(messageId, timestamp, PAYLOAD);
+    const backend = whopSignLikeBackend(
+      TEST_SECRET,
+      messageId,
+      unixSeconds,
+      PAYLOAD,
+    );
+    assert.equal(ours.replace(/^v1,/, ""), backend);
+  });
+
+  it("a `ws_` prefixed secret is usable (it used to throw)", () => {
+    // The library's base64 decoder rejects `_`, so this throws unless the
+    // secret is encoded first.
+    assert.doesNotThrow(() => {
+      verifyWhopWebhook(PAYLOAD, backendSignedHeaders());
+    });
+  });
 });
 
 // ===========================================================================
