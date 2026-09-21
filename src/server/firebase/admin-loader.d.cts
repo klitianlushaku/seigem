@@ -39,3 +39,12 @@ export function Timestamp(): typeof FirestoreTimestamp;
 
 /** Returns the Firestore FieldValue sentinel. Lazy for the same reason. */
 export function FieldValue(): typeof FirestoreFieldValue;
+
+/** Resolution diagnostics for /api/health. Paths and booleans only. */
+export function describeResolution(): {
+  resolved: string | null;
+  cwd: string;
+  searchedDirs: string[];
+  dirsThatExist: string[];
+  adminPresent: boolean;
+};

@@ -77,67 +77,177 @@ const path = require("node:path");
 const nodeRequire = createRequire(path.join(process.cwd(), "noop.js"));
 
 /**
- * Resolves the absolute path of a firebase-admin product entry point.
+ * Loads one firebase-admin product, trying every viable strategy.
  *
- * Uses `path.join` on the directory found by `require.resolve` for the package
- * itself. Because the resolved path is a plain filesystem path, the subsequent
- * `require` bypasses the package's `exports` map — which is the whole point,
- * since that map's `import` condition points at an ESM wrapper Node cannot load.
+ * Order matters:
+ *
+ *   1. ABSOLUTE FILE PATH. Resolves the package root, then requires
+ *      `lib/<product>/index.js` directly. This bypasses the package's `exports`
+ *      map, whose `import` condition points at an ESM wrapper Node cannot load.
+ *      When it works, this is the most reliable option because no condition
+ *      resolution is involved.
+ *
+ *   2. THE BARE SUBPATH, through CommonJS `require`. Node's `require` honours
+ *      the `require` condition, which is the working CommonJS build. This is a
+ *      genuinely different code path from the ESM `import()` that the bundler
+ *      emitted and that produced ERR_REQUIRE_ESM. It only fails if the package
+ *      is missing entirely.
+ *
+ * Both are attempted because the file layout differs between local development,
+ * a Next.js build, and a Vercel function bundle, and a working deployment
+ * matters more than using one specific mechanism.
  *
  * @param {string} product Directory under `firebase-admin/lib`, e.g. "auth".
- * @returns {string} Absolute path to `<package>/lib/<product>/index.js`.
+ * @returns {any} The loaded product module.
  */
-function entryFor(product) {
+function loadProduct(product) {
   const mainEntry = resolveAdminMain();
-  if (!mainEntry) {
+
+  if (mainEntry) {
+    const packageRoot = path.dirname(path.dirname(mainEntry));
+    const entry = path.join(packageRoot, "lib", product, "index.js");
+    if (fs.existsSync(entry)) return nodeRequire(entry);
+  }
+
+  // Fall back to the bare specifier. `require` selects the CommonJS condition,
+  // so this does not reproduce the ESM failure.
+  try {
+    return nodeRequire(`firebase-admin/${product}`);
+  } catch (error) {
+    const detail = describeResolution();
     throw new Error(
-      "firebase-admin is not installed, so the Admin SDK cannot be loaded. " +
-        "It must be listed in `dependencies` (not `devDependencies`) so it is " +
-        "present in the deployed environment.",
+      `firebase-admin could not be loaded (product: ${product}). ` +
+        `cwd=${detail.cwd} ` +
+        `existingModuleDirs=${JSON.stringify(detail.dirsThatExist)} ` +
+        `Cause: ${error && error.message}`,
     );
   }
-  const packageRoot = path.dirname(path.dirname(mainEntry));
-  return path.join(packageRoot, "lib", product, "index.js");
 }
 
 /**
- * Resolves the firebase-admin main file.
- *
- * Two strategies, in order:
- *
- *   1. `require.resolve`, which is correct at runtime.
- *   2. An upward filesystem walk from the RUNTIME working directory.
- *
- * Both avoid `__dirname` and `__filename`: the bundler rewrites those to
- * build-time literals (`/ROOT/...`) that do not exist on the deployed host.
- *
- * @returns {string | null} Absolute path to firebase-admin's main entry, or
- *   null when no installed copy can be found (for example during a build).
+ * Relative path from a `node_modules` directory to the Admin SDK entry file.
+ * Every candidate directory below is checked against this.
  */
-function resolveAdminMain() {
+const ADMIN_ENTRY_SUFFIX = "/firebase-admin/lib/index.js";
+
+/**
+ * Every directory that could contain an installed firebase-admin.
+ *
+ * Collects candidates from several sources, because no single one is reliable
+ * across local development, a Next.js build, and a Vercel serverless function:
+ *
+ *   1. `require.resolve.paths()` — Node's OWN search path list for this
+ *      module. This is the authoritative answer and works whenever the package
+ *      is resolvable at all.
+ *   2. An upward walk from `process.cwd()` — on Vercel the function runs with
+ *      the deployment root as its working directory (`/var/task`), which holds
+ *      `node_modules`.
+ *   3. A small set of known deployment layouts, as a last resort.
+ *
+ * `__dirname` and `__filename` are deliberately NEVER used: the bundler rewrites
+ * them to build-time literals (`/ROOT/...`) that do not exist on the deployed
+ * host, which is what broke the previous attempt.
+ *
+ * @returns {string[]} Candidate directories that may contain `firebase-admin`.
+ */
+function candidateModuleDirs() {
+  const dirs = [];
+
+  /** Adds a path once, ignoring empties. */
+  const add = (value) => {
+    if (typeof value === "string" && value.length > 0 && !dirs.includes(value)) {
+      dirs.push(value);
+    }
+  };
+
+  // 1. Node's own search paths, resolved at runtime.
   try {
-    const resolved = nodeRequire.resolve("firebase-admin");
-    if (fs.existsSync(resolved)) return resolved;
+    const paths = nodeRequire.resolve.paths("firebase-admin") || [];
+    for (const p of paths) add(p);
   } catch {
-    // Fall through to the filesystem walk.
+    // Not fatal: the walk below may still find it.
   }
 
-  // Walk up from the runtime working directory. On Vercel this is the
-  // deployment root (/var/task), which holds node_modules.
+  // 2. Walk up from the runtime working directory.
   let dir = process.cwd();
   for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = path.join(dir, "node_modules", "firebase-admin", "lib", "index.js");
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch {
-      // Keep walking up.
-    }
+    add(path.join(dir, "node_modules"));
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
 
+  // 3. Known serverless layouts.
+  add("/var/task/node_modules");
+  add(path.join(process.cwd(), ".next", "server", "node_modules"));
+
+  return dirs;
+}
+
+/**
+ * Locates the Admin SDK entry file on disk.
+ *
+ * @returns {string | null} Absolute path to `firebase-admin/lib/index.js`, or
+ *   null when no installed copy exists.
+ */
+function resolveAdminMain() {
+  // Prefer the normal resolver, which is correct at runtime.
+  try {
+    const resolved = nodeRequire.resolve("firebase-admin");
+    if (fs.existsSync(resolved)) return resolved;
+  } catch {
+    // Fall through to the directory scan.
+  }
+
+  for (const dir of candidateModuleDirs()) {
+    const candidate = `${dir}${ADMIN_ENTRY_SUFFIX}`;
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // Ignore unreadable directories and keep looking.
+    }
+  }
+
   return null;
+}
+
+/**
+ * Reports what the loader can see, WITHOUT loading the SDK or throwing.
+ *
+ * Exposed so `/api/health` can explain a deployment failure directly, instead
+ * of the only symptom being a generic 500. It reveals file paths and booleans
+ * only — never a credential.
+ *
+ * @returns {{
+ *   resolved: string | null,
+ *   cwd: string,
+ *   searchedDirs: string[],
+ *   dirsThatExist: string[],
+ *   adminPresent: boolean
+ * }}
+ */
+function describeResolution() {
+  const searchedDirs = candidateModuleDirs();
+
+  /** Directories from the candidate list that actually exist on disk. */
+  const dirsThatExist = [];
+  for (const dir of searchedDirs) {
+    try {
+      if (fs.existsSync(dir)) dirsThatExist.push(dir);
+    } catch {
+      // Unreadable: treat as absent.
+    }
+  }
+
+  const resolved = resolveAdminMain();
+
+  return {
+    resolved,
+    cwd: process.cwd(),
+    searchedDirs,
+    dirsThatExist,
+    adminPresent: resolved !== null,
+  };
 }
 
 /**
@@ -157,9 +267,9 @@ function load() {
   if (modules) return modules;
 
   modules = {
-    app: nodeRequire(entryFor("app")),
-    auth: nodeRequire(entryFor("auth")),
-    firestore: nodeRequire(entryFor("firestore")),
+    app: loadProduct("app"),
+    auth: loadProduct("auth"),
+    firestore: loadProduct("firestore"),
   };
 
   return modules;
@@ -235,4 +345,10 @@ module.exports = {
   getAdminDb,
   Timestamp: () => load().firestore.Timestamp,
   FieldValue: () => load().firestore.FieldValue,
+  /**
+   * Diagnostics for /api/health. Reports the resolution outcome and the
+   * directories that exist, without loading the SDK or throwing. Paths and
+   * booleans only, so it is safe to serve from an unauthenticated endpoint.
+   */
+  describeResolution,
 };

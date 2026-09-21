@@ -14,6 +14,7 @@
 import "server-only";
 
 import { whopConfigurationProblems } from "@/lib/env/server";
+import { describeResolution } from "@/server/firebase/admin-loader.cjs";
 
 /** True when a value is present and not an obvious placeholder. */
 function isSet(value: string | undefined): boolean {
@@ -38,6 +39,21 @@ export interface ConfigurationReport {
   firebaseWeb: { ok: boolean };
   deepSeek: { ok: boolean };
   whop: { ok: boolean; problems: string[] };
+  /**
+   * Whether the Admin SDK package is physically present in this deployment.
+   *
+   * Separate from `firebaseAdmin` above, which only reports that the
+   * environment VARIABLES are set. A deployment can have perfect credentials
+   * and still fail because the firebase-admin files were not bundled — that
+   * produced "Cannot find module /var/task/node_modules/firebase-admin/..."
+   * and a generic 500 on every authenticated route.
+   */
+  adminSdk: {
+    ok: boolean;
+    resolved: string | null;
+    cwd: string;
+    moduleDirsFound: string[];
+  };
 }
 
 /**
@@ -81,12 +97,25 @@ export function inspectConfiguration(): ConfigurationReport {
     problems,
   };
 
+  // Ask the loader where it thinks the Admin SDK is. This never throws and
+  // never loads the SDK, so it is safe to call from an unauthenticated probe.
+  const resolution = describeResolution();
+  const adminSdk = {
+    ok: resolution.adminPresent,
+    resolved: resolution.resolved,
+    cwd: resolution.cwd,
+    // Only the directories that actually exist, to keep the response small.
+    moduleDirsFound: resolution.dirsThatExist,
+  };
+
   return {
     // The headline signal: when false, every protected route returns 500.
-    apiReady: firebaseAdmin.ok && deepSeek.ok,
+    // Both halves must hold: credentials present AND the SDK actually shipped.
+    apiReady: firebaseAdmin.ok && deepSeek.ok && adminSdk.ok,
     firebaseAdmin,
     firebaseWeb,
     deepSeek,
     whop,
+    adminSdk,
   };
 }
