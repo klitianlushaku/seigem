@@ -11,10 +11,21 @@
  */
 import "server-only";
 
-
 import type { PlanId } from "@/config/plans";
+import { coercePlan } from "@/lib/billing";
 import { COLLECTIONS, FIELDS } from "@/lib/firebase/collections";
 import { Timestamp, getAdminDb } from "@/server/firebase/admin";
+
+/**
+ * Orders the plans so a "downgrade" can be detected when a delayed event from a
+ * superseded subscription arrives. Mirrors `PLAN_ORDER` in `@/config/plans`.
+ */
+const PLAN_RANK: Readonly<Record<PlanId, number>> = { free: 0, plus: 1, pro: 2 };
+
+/** Rank of a plan, for comparison. */
+function planRank(plan: PlanId): number {
+  return PLAN_RANK[plan];
+}
 
 /** Fields written when a subscription changes. */
 export interface SubscriptionUpdate {
@@ -40,6 +51,19 @@ function usersCollection() {
 /**
  * Links a Whop subscription to a Seigem account and applies its plan.
  *
+ * Guards against a delayed event for a SUPERSEDED subscription downgrading a
+ * plan the customer is actively paying for. Whop does not guarantee delivery
+ * order, so "Plus activated" can arrive after the customer has upgraded to Pro:
+ *
+ *   buy Plus -> upgrade to Pro -> delayed "Plus activated" -> Pro lost
+ *
+ * A grant is therefore ignored when it names a DIFFERENT subscription, the
+ * account is currently on a paid plan, and the incoming plan is LOWER. Both
+ * legitimate cases still pass:
+ *
+ *   upgrade    account on Plus, incoming Pro from a new subscription -> applied
+ *   re-purchase account free, incoming Plus from a new subscription  -> applied
+ *
  * @param uid The Firebase uid, resolved from a trusted server-side lookup —
  *   never taken from the webhook body, which an attacker could influence.
  */
@@ -48,6 +72,31 @@ export async function applySubscriptionUpdate(
   update: SubscriptionUpdate,
 ): Promise<void> {
   const ref = usersCollection().doc(uid);
+
+  if (update.whopSubscriptionId) {
+    const snapshot = await ref.get();
+    const data = snapshot.data() ?? {};
+    const storedSubscription = data[FIELDS.whopSubscriptionId];
+    const currentPlan = coercePlan(data[FIELDS.plan]);
+
+    const isReplacement =
+      typeof storedSubscription === "string" &&
+      storedSubscription.length > 0 &&
+      storedSubscription !== update.whopSubscriptionId;
+
+    if (
+      isReplacement &&
+      planRank(currentPlan) > 0 &&
+      planRank(update.plan) < planRank(currentPlan)
+    ) {
+      console.warn(
+        `[billing] ignoring "${update.plan}" for ${uid}: it comes from ` +
+          `superseded subscription ${update.whopSubscriptionId}, and the ` +
+          `account is on "${currentPlan}" via ${storedSubscription}.`,
+      );
+      return;
+    }
+  }
 
   await ref.set(
     {
@@ -74,12 +123,47 @@ export async function applySubscriptionUpdate(
 /**
  * Downgrades a user to the free plan.
  *
- * Used for expiration and revocation. The Whop subscription id
- * is retained so a later reactivation can be matched to the same account; only
- * the entitlement is removed.
+ * Used for expiration and revocation. The Whop subscription id is retained so a
+ * later reactivation can be matched to the same account; only the entitlement is
+ * removed.
+ *
+ * THE SUPERSEDED-SUBSCRIPTION GUARD IS ESSENTIAL. Whop does not guarantee
+ * delivery order, so a deactivation for an ALREADY-REPLACED subscription can
+ * arrive after the customer has bought a newer one. Revoking on that event takes
+ * away access the customer is actively paying for:
+ *
+ *   buy Plus -> upgrade to Pro -> delayed "Plus deactivated" -> Pro revoked
+ *
+ * So a revoke is applied ONLY when it names the subscription currently on the
+ * account. Anything else is a stale event for a superseded subscription and is
+ * ignored. Verified by tools/audit-billing.mjs, which failed this scenario
+ * before the guard existed.
+ *
+ * @param subscriptionId The subscription the event refers to, when known.
+ *   Omit to force a revoke (used where the caller has already established that
+ *   the account should lose access).
+ * @returns True when the account was actually downgraded.
  */
-export async function revokeSubscription(uid: string, reason: string): Promise<void> {
+export async function revokeSubscription(
+  uid: string,
+  reason: string,
+  subscriptionId?: string | null,
+): Promise<boolean> {
   const ref = usersCollection().doc(uid);
+
+  if (subscriptionId) {
+    const snapshot = await ref.get();
+    const stored = snapshot.data()?.[FIELDS.whopSubscriptionId];
+
+    if (typeof stored === "string" && stored.length > 0 && stored !== subscriptionId) {
+      console.warn(
+        `[billing] ignoring "${reason}" for ${uid}: it names ${subscriptionId}, ` +
+          `but the account is on ${stored}. A superseded subscription must not ` +
+          "revoke access the customer is currently paying for.",
+      );
+      return false;
+    }
+  }
 
   await ref.set(
     {
@@ -92,6 +176,7 @@ export async function revokeSubscription(uid: string, reason: string): Promise<v
   );
 
   console.info(`[billing] user ${uid} downgraded to free (${reason})`);
+  return true;
 }
 
 /** Reads the billing state needed by the settings page and cancellation API. */

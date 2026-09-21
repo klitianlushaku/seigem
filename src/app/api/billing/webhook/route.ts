@@ -142,9 +142,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       (entitlement.type === "revoke" || eventKind === "revoke") &&
       !scheduledCancellation
     ) {
-      await revokeSubscription(uid, eventName ?? "revoke");
+      /*
+       * The subscription id is passed so the revoke can be checked against the
+       * subscription currently on the account. Whop does not guarantee delivery
+       * order, and a deactivation for an already-replaced subscription must not
+       * take away access the customer is actively paying for.
+       */
+      const revoked = await revokeSubscription(
+        uid,
+        eventName ?? "revoke",
+        subscription.subscriptionId,
+      );
+
       return NextResponse.json(
-        { received: true, handled: true, plan: DEFAULT_PLAN_ID },
+        { received: true, handled: revoked, plan: DEFAULT_PLAN_ID },
         { status: 200 },
       );
     }
