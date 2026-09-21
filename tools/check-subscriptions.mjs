@@ -50,30 +50,61 @@ const PLAN_FOR_PRODUCT = {
   [env.WHOP_PRO_PRODUCT_ID]: "Pro",
 };
 
-/** Memberships that will bill again at the end of the current period. */
+/**
+ * Memberships that will bill again at the end of the current period.
+ */
 const willRenew = [];
+
+/**
+ * Active memberships that cannot renew, so they are NOT a billing risk.
+ *
+ * A ONE-TIME purchase is reported by the API with `status: active` and
+ * `cancel_at_period_end: false` — identical to a live subscription — but with NO
+ * billing period at all (`current_period_end` and `renewal_period_end` both
+ * null). There is nothing to renew and nothing to cancel, which is why Whop's
+ * dashboard shows those rows as "One-time" and offers no cancel action.
+ *
+ * The first version of this tool did not check for a period, so it reported a
+ * one-time purchase as "WILL CHARGE" and sent the owner looking for a cancel
+ * button that does not exist. A false alarm about money is worse than no tool.
+ */
+const notRecurring = [];
 
 console.log("=== every membership on this account ===\n");
 
 for (const membership of memberships) {
+  const livesNow = ["active", "trialing"].includes(membership.status);
+
+  /** A recurring membership always carries a billing period. */
+  const billingPeriod =
+    membership.current_period_end ?? membership.renewal_period_end ?? null;
+  const hasBillingPeriod = Boolean(billingPeriod);
+
   const willCharge =
-    ["active", "trialing"].includes(membership.status) &&
-    membership.cancel_at_period_end !== true;
+    livesNow && membership.cancel_at_period_end !== true && hasBillingPeriod;
 
   const product = PLAN_FOR_PRODUCT[membership.product_id] ?? membership.product_id;
   const uid = membership.metadata?.seigem_uid ?? "(no metadata)";
 
+  const verdict = willCharge
+    ? "WILL CHARGE"
+    : livesNow
+      ? "one-time   "
+      : "safe       ";
+
   console.log(
-    `${willCharge ? "WILL CHARGE" : "safe       "}  ${membership.id}\n` +
+    `${verdict}  ${membership.id}\n` +
       `    product            : ${product}\n` +
       `    status             : ${membership.status}\n` +
       `    cancel_at_period_end: ${membership.cancel_at_period_end}\n` +
-      `    period ends         : ${membership.current_period_end ?? "(none)"}\n` +
+      `    period ends         : ${billingPeriod ?? "(none — one-time purchase)"}\n` +
       `    account             : ${uid}\n`,
   );
 
   if (willCharge) {
     willRenew.push({ membership, product, uid });
+  } else if (livesNow) {
+    notRecurring.push({ membership, product, uid });
   }
 }
 
@@ -88,7 +119,19 @@ if (willRenew.length === 0) {
     );
   }
   console.log(
-    "\n  Cancel them at https://whop.com/dashboard -> Memberships, or with\n" +
+    "\n  Cancel them at https://whop.com/@me/settings/orders/, or with\n" +
       "  the API. Cancelling at period end keeps access until the date above.",
   );
 }
+
+if (notRecurring.length > 0) {
+  console.log(
+    `\n  ${notRecurring.length} membership(s) are ACTIVE but NOT RECURRING\n` +
+      "  (one-time purchases). They cannot renew and cannot be cancelled —\n" +
+      "  there is no subscription behind them:",
+  );
+  for (const { membership, product, uid } of notRecurring) {
+    console.log(`    - ${product}  ${membership.id}  (${uid})`);
+  }
+}
+
