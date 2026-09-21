@@ -136,6 +136,24 @@ if (configuredAdmins.length === 0) {
 const adminUid = configuredAdmins[0];
 
 /*
+ * Sweep up anything a previous interrupted run left behind.
+ *
+ * The cleanup at the end cannot be relied on: if this process is killed — which
+ * happens whenever its output is piped into something that stops reading early —
+ * no `finally` runs and the throwaway account survives. A later run then has to
+ * cope with it, so it clears them up front rather than accumulating test
+ * accounts in the very panel this tool checks.
+ */
+const existing = await auth.listUsers(1000);
+for (const candidate of existing.users) {
+  if ((candidate.email ?? "").includes("admin-audit-")) {
+    await db.collection("users").doc(candidate.uid).delete().catch(() => undefined);
+    await auth.deleteUser(candidate.uid).catch(() => undefined);
+    console.log(`Cleaned up a leftover audit account: ${candidate.uid}`);
+  }
+}
+
+/*
  * A THROWAWAY account, created and deleted by this tool.
  *
  * Earlier versions looked for an existing free account to use as a sandbox. That
@@ -323,6 +341,9 @@ check("...and the account is untouched", (await planOf(sandbox.uid)) === "free")
  * The throwaway account is DELETED, not merely reset: leaving test accounts in
  * the user list would pollute the very admin panel this tool checks, and a stray
  * account is a stray surface.
+ *
+ * The next run also sweeps for these up front, because a killed process cannot
+ * run this.
  */
 console.log("\n--- removing the throwaway account");
 await db.collection("users").doc(throwaway.uid).delete();
