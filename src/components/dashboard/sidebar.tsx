@@ -190,8 +190,26 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           {loading ? (
             <p className="px-2 py-2 text-xs text-muted">Duke lexuar…</p>
           ) : recent.length === 0 ? (
+            /*
+             * A signed-out visitor has no materials by definition, so telling
+             * them "you have none yet" is noise. They get an invitation to sign
+             * in instead, which is the only action available to them.
+             */
             <p className="px-2 py-2 text-xs leading-5 text-muted">
-              Nuk ka materiale ende. Ngarko një dokument për të filluar.
+              {user ? (
+                "Nuk ka materiale ende. Ngarko një dokument për të filluar."
+              ) : (
+                <>
+                  Hyr për të ruajtur materialet e tua.{" "}
+                  <Link
+                    href="/login?next=%2Fdashboard"
+                    {...navProps}
+                    className="text-accent hover:underline"
+                  >
+                    Fillo tani
+                  </Link>
+                </>
+              )}
             </p>
           ) : (
             <ul className="space-y-0.5">

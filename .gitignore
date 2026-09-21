@@ -67,5 +67,5 @@ tsconfig.tests.tsbuildinfo
 next-env.d.ts
 
 # Local screenshots from tools/check-welcome.mjs
-welcome-preview.png
+welcome-*.png
 
