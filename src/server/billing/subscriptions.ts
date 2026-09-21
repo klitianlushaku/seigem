@@ -134,6 +134,34 @@ export async function markCancellationAtPeriodEnd(
   );
 }
 
+/**
+ * Clears a stored Whop subscription link that Whop does not recognise.
+ *
+ * Used when Whop answers 404 for the membership id on the account, which means
+ * the link is stale — created outside the normal flow, or recorded incorrectly.
+ * Leaving it in place means the account is offered a cancel button that is
+ * guaranteed to fail on every attempt, with no way for the customer to fix it.
+ *
+ * The PLAN IS DELIBERATELY NOT CHANGED. Dropping a link removes a claim about
+ * how the subscription is managed; it must never remove access the customer may
+ * have paid for. Only a verified webhook revokes entitlement.
+ */
+export async function clearSubscriptionLink(uid: string): Promise<void> {
+  await usersCollection().doc(uid).set(
+    {
+      [FIELDS.whopSubscriptionId]: null,
+      [FIELDS.cancelAtPeriodEnd]: false,
+      [FIELDS.updatedAt]: Timestamp.now(),
+    },
+    { merge: true },
+  );
+
+  console.warn(
+    `[billing] cleared the stale subscription link for ${uid}; ` +
+      "the plan was left unchanged",
+  );
+}
+
 /** Finds the Seigem uid linked to a Whop subscription id. */
 export async function findUidBySubscriptionId(
   subscriptionId: string,

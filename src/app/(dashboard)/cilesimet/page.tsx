@@ -18,6 +18,7 @@ import Link from "next/link";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Alert, Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Toast } from "@/components/ui/toast";
 import { DEFAULT_PLAN_ID, getPlan, type PlanId } from "@/config/plans";
 import {
@@ -37,6 +38,8 @@ export default function SettingsPage() {
   const [cancelPending, setCancelPending] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingNotice, setBillingNotice] = useState<string | null>(null);
+  /** Controls the in-app confirmation dialog. */
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Read the plan and today's real allowance once. State is applied in a
   // microtask rather than synchronously in the effect body, which React flags
@@ -71,22 +74,19 @@ export default function SettingsPage() {
 
   const plan = getPlan(planId);
 
+  /**
+   * Archives the cancellation error message for a stale subscription link.
+   *
+   * Kept separate from `billingError` so the UI can hide the cancel button once
+   * the server reports that the stored link was cleared — otherwise the customer
+   * keeps being offered an action that can never work.
+   */
+  const [linkCleared, setLinkCleared] = useState(false);
+
   const cancelSubscription = async () => {
     if (subscription?.cancelAtPeriodEnd) return;
-    if (!subscription?.hasSubscription) {
-      setBillingError(
-        "Abonimi Pro nuk është lidhur me Whop. Kontakto mbështetjen që ta lidhim para anulimit.",
-      );
-      return;
-    }
-    if (
-      !window.confirm(
-        "Anulo abonimin në fund të periudhës së paguar? Plani yt do të mbetet aktiv deri atëherë.",
-      )
-    ) {
-      return;
-    }
 
+    setConfirmOpen(false);
     setBillingError(null);
     setBillingNotice(null);
     setCancelPending(true);
@@ -104,18 +104,27 @@ export default function SettingsPage() {
       });
       const payload = (await response.json()) as {
         cancelAtPeriodEnd?: boolean;
-        planExpiresAt?: string;
-        error?: { message?: string };
+        planExpiresAt?: string | null;
+        alreadyScheduled?: boolean;
+        error?: { code?: string; message?: string };
       };
 
-      if (!response.ok || !payload.cancelAtPeriodEnd || !payload.planExpiresAt) {
+      if (!response.ok || !payload.cancelAtPeriodEnd) {
         setBillingError(
           payload.error?.message ??
             "Nuk mund ta anulojmë abonimin. Provo përsëri.",
         );
+        // The server clears a subscription link Whop does not recognise, so the
+        // account no longer has a cancellable subscription at all.
+        if (payload.error?.code === "not_found") setLinkCleared(true);
         return;
       }
 
+      /*
+       * A missing end date is normal, not a failure: Whop reports
+       * `current_period_end: null` for these memberships. The cancellation
+       * itself succeeded, so it is reported as such.
+       */
       setSubscription((current) =>
         current
           ? {
@@ -125,7 +134,12 @@ export default function SettingsPage() {
             }
           : current,
       );
-      setBillingNotice("Abonimi u anulua. Plani mbetet aktiv deri në fund të periudhës.");
+
+      setBillingNotice(
+        payload.planExpiresAt
+          ? `Abonimi u anulua. Plani mbetet aktiv deri më ${formatDate(payload.planExpiresAt)}.`
+          : "Abonimi u anulua dhe nuk do të rinovohet. Plani mbetet aktiv deri në fund të periudhës që ke paguar.",
+      );
     } catch (unexpected) {
       console.error("[settings] cancellation failed:", unexpected);
       setBillingError("Nuk mund ta anulojmë abonimin. Provo përsëri.");
@@ -211,11 +225,21 @@ export default function SettingsPage() {
               <p className="mt-2 text-xs text-stat-orange">
                 Plani yt mbetet aktiv deri në këtë datë. Nuk do të ketë rinovim tjetër.
               </p>
+            ) : linkCleared ? (
+              /*
+                The stored subscription was not one Whop recognised, so the
+                server cleared the link. The cancel action is hidden rather than
+                offered again: it can never succeed from here.
+              */
+              <p className="mt-2 text-xs text-muted">
+                Abonimi nuk mund të anulohet nga këtu. Shkruaj në mbështetje dhe
+                e rregullojmë.
+              </p>
             ) : (
               <Button
                 variant="secondary"
                 className="mt-3 border-danger/50 text-danger hover:border-danger"
-                onClick={() => void cancelSubscription()}
+                onClick={() => setConfirmOpen(true)}
                 disabled={cancelPending}
               >
                 {cancelPending ? "Duke anuluar…" : "Anulo abonimin"}
@@ -225,6 +249,11 @@ export default function SettingsPage() {
         ) : null}
 
         {billingError ? <div className="mt-3"><Alert>{billingError}</Alert></div> : null}
+        {billingNotice ? (
+          <Toast tone="success" onDismiss={() => setBillingNotice(null)}>
+            {billingNotice}
+          </Toast>
+        ) : null}
 
         <h3 className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
           Të mbetura sot
@@ -294,6 +323,26 @@ export default function SettingsPage() {
           </Button>
         </div>
       </Card>
+
+      {/*
+        Confirmation for cancelling, in place of `window.confirm`. That dialog is
+        browser chrome: it shows the origin, cannot be styled or translated, and
+        looks borrowed. Cancelling a paid subscription deserves the app's own UI.
+      */}
+      <ConfirmDialog
+        open={confirmOpen}
+        tone="danger"
+        title="Anulo abonimin?"
+        confirmLabel="Anulo abonimin"
+        cancelLabel="Jo, mbaje"
+        onConfirm={() => void cancelSubscription()}
+        onCancel={() => setConfirmOpen(false)}
+      >
+        <p>
+          Abonimi nuk do të rinovohet. Plani mbetet aktiv deri në fund të
+          periudhës që ke paguar, dhe mund ta rifillosh në çdo moment.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 
 import { cn } from "@/lib/utils/cn";
 
@@ -7,6 +7,14 @@ type Variant = "primary" | "secondary" | "ghost";
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   children: ReactNode;
+  /**
+   * Forwarded to the underlying element.
+   *
+   * React 19 passes `ref` as an ordinary prop to function components, so no
+   * `forwardRef` wrapper is needed. Callers use it for focus management — a
+   * confirmation dialog focuses its confirm button when it opens.
+   */
+  ref?: Ref<HTMLButtonElement>;
 }
 
 const VARIANT_CLASSES: Record<Variant, string> = {
@@ -26,10 +34,12 @@ export function Button({
   className,
   children,
   type = "button",
+  ref,
   ...rest
 }: ButtonProps) {
   return (
     <button
+      ref={ref}
       type={type}
       className={cn(
         "inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors",
