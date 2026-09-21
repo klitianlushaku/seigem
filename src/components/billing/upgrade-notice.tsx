@@ -4,22 +4,21 @@
  * Post-checkout notice.
  *
  * Whop sends the buyer back to `/dashboard?checkout=return` immediately after
- * payment. The plan is granted by a WEBHOOK, however, which arrives separately
- * and a few seconds later. So at the moment of return the buyer has paid but is
- * still on the old plan.
+ * payment. The plan used to be granted by a WEBHOOK that arrives separately, so
+ * the customer landed on the dashboard having paid and saw nothing change until
+ * it landed. Waiting for that made activation feel slow — the webhook's timing
+ * is Whop's, not ours.
  *
- * Without this, that gap is silent and alarming: the customer has just been
- * charged, lands on the dashboard, and nothing has changed. It looks like the
- * payment failed, and the natural reaction is to pay again or ask for a refund.
+ * So the first thing this does is ASK WHOP DIRECTLY, via `/api/billing/verify`.
+ * That is one round trip, so the plan is normally active before the notice even
+ * paints. The webhook is still the source of truth; this closes the gap.
  *
- * This closes the gap by:
- *   1. recognising the `checkout=return` marker,
- *   2. polling the plan until the webhook lands,
- *   3. confirming the upgrade by name, or explaining that it is still arriving.
+ * Polling remains as a safety net for the case where Whop has not yet recorded
+ * the membership (a card that needed 3-D Secure, say), but with a short interval
+ * because the common case is now handled outright.
  *
- * It never grants anything itself. Only the verified webhook does that, so a
- * visitor who fakes the query string sees nothing but a "still activating"
- * message.
+ * It never grants anything itself: only the verified server can, so a visitor
+ * who fakes the query string sees nothing but a "still activating" message.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -30,16 +29,16 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { cn } from "@/lib/utils/cn";
 
 /** How often to re-check the plan while waiting for the webhook. */
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 1500;
 
 /**
  * How long to keep polling.
  *
- * Whop retries failed deliveries, and a slow webhook can take a minute. After
- * this the notice stops claiming to be "activating" and tells the buyer the
- * charge went through, so they are never left guessing.
+ * Short, because verification has already done the work. This window only covers
+ * the case where Whop has not recorded the membership yet, and after it the
+ * notice stops claiming to be "activating" rather than spinning forever.
  */
-const POLL_TIMEOUT_MS = 120_000;
+const POLL_TIMEOUT_MS = 25_000;
 
 type Phase = "idle" | "waiting" | "activated" | "delayed";
 
@@ -74,6 +73,39 @@ export function UpgradeNotice() {
     return isPlanId(value) ? value : null;
   }, [getIdToken]);
 
+  /**
+   * Asks the server to verify the purchase with Whop directly.
+   *
+   * This is what makes activation immediate: the server looks the membership up
+   * and applies it, rather than us waiting for a webhook to arrive. Returns the
+   * plan when it succeeded, or null when there is nothing to claim yet.
+   */
+  const verifyWithWhop = useCallback(async (): Promise<PlanId | null> => {
+    const token = await getIdToken();
+    if (!token) return null;
+
+    try {
+      const response = await fetch("/api/billing/verify", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) return null;
+
+      const payload = (await response.json()) as {
+        activated?: boolean;
+        plan?: unknown;
+      };
+
+      if (payload.activated !== true) return null;
+      return isPlanId(payload.plan) ? payload.plan : null;
+    } catch {
+      // Treated as "not yet": the poll below still runs, and the webhook
+      // remains the backstop. A network blip must not report a failure.
+      return null;
+    }
+  }, [getIdToken]);
+
   useEffect(() => {
     if (!hasCheckoutReturnMarker()) return;
 
@@ -82,15 +114,29 @@ export function UpgradeNotice() {
     const startedAt = Date.now();
 
     /**
-     * Polls until the plan changes, the timeout passes, or we unmount.
+     * Verifies once, then polls only if that found nothing.
      *
      * The phase is set only AFTER the first await, never synchronously in the
      * effect body: a synchronous `setState` there triggers a cascading render
-     * (and React's lint rule rejects it). Deferring also means a buyer whose
-     * plan is already active sees the confirmation directly, with no flash of
-     * the "activating…" state first.
+     * (and React's lint rule rejects it). Deferring also means a buyer whose plan
+     * is already active sees the confirmation directly, with no flash of the
+     * "activating…" state first.
      */
-    const poll = async () => {
+    const poll = async (isFirstAttempt: boolean) => {
+      // The first attempt goes straight to Whop, which is the whole point: it
+      // resolves the common case in one round trip instead of waiting.
+      const claimed = isFirstAttempt ? await verifyWithWhop() : null;
+      if (cancelled) return;
+
+      if (claimed && claimed !== "free") {
+        previousPlan.current = claimed;
+        setPlan(claimed);
+        setPhase("activated");
+        clearCheckoutMarker();
+        emitAppEvent(PLAN_CHANGED);
+        return;
+      }
+
       const current = await readPlan();
       if (cancelled) return;
 
@@ -113,16 +159,16 @@ export function UpgradeNotice() {
       }
 
       setPhase("waiting");
-      timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      timer = setTimeout(() => void poll(false), POLL_INTERVAL_MS);
     };
 
-    void poll();
+    void poll(true);
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [readPlan]);
+  }, [readPlan, verifyWithWhop]);
 
   if (phase === "idle") return null;
 

@@ -157,6 +157,12 @@ export const RATE_LIMITS = {
    * with checkout was low enough that an admin fixing four accounts hit it.
    */
   admin: { limit: 60, windowMs: 60_000 },
+  /**
+   * Post-checkout verification. Each call reads from Whop, so it is bounded —
+   * but generously, because it is the call that makes activation feel instant
+   * and the client retries it a few times while the purchase settles.
+   */
+  verify: { limit: 30, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;
 
 /** Identifies the caller for rate-limiting purposes. */
