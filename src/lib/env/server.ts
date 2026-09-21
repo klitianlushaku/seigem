@@ -103,7 +103,37 @@ export const serverEnv = {
   get whopProPlanId() {
     return process.env.WHOP_PRO_PLAN_ID ?? null;
   },
+
+  // --- Admin ----------------------------------------------------------
+  /**
+   * Uids allowed into the admin panel, from a comma-separated `ADMIN_UIDS`.
+   *
+   * DELIBERATELY AN ENVIRONMENT VARIABLE, not a database flag. The admin panel
+   * can hand out paid plans for free, so the way to BECOME an admin must not be
+   * reachable from the application at all — not by a client, and not by a bug in
+   * some write path. An env var can only be changed by someone who already
+   * controls the deployment.
+   *
+   * A Firestore `isAdmin` field would make the panel's security depend on the
+   * security rules being perfect. This does not.
+   *
+   * Empty by default, which means nobody is an admin.
+   */
+  get adminUids(): ReadonlySet<string> {
+    const raw = process.env.ADMIN_UIDS ?? "";
+    return new Set(
+      raw
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    );
+  },
 } as const;
+
+/** True when a uid is on the admin allow-list. */
+export function isAdminUid(uid: string): boolean {
+  return serverEnv.adminUids.has(uid);
+}
 
 /**
  * True when a Whop id carries the expected prefix.

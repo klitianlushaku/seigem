@@ -147,6 +147,16 @@ export const RATE_LIMITS = {
   history: { limit: 60, windowMs: 60_000 },
   /** Checkout sessions are rare; a low limit prevents enumeration. */
   checkout: { limit: 5, windowMs: 60_000 },
+  /**
+   * Admin actions. Higher than checkout because legitimate admin work is
+   * repetitive — fixing several accounts in a row, or correcting a batch of
+   * plans — and a limit that blocks real use just gets worked around.
+   *
+   * Still bounded: it caps the damage if an admin token is ever stolen, which is
+   * the reason to limit a trusted caller at all. The 5/minute this used to share
+   * with checkout was low enough that an admin fixing four accounts hit it.
+   */
+  admin: { limit: 60, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;
 
 /** Identifies the caller for rate-limiting purposes. */

@@ -16,6 +16,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useIsAdmin } from "@/components/admin/use-is-admin";
 import {
   BookIcon,
   ChevronRightIcon,
@@ -25,6 +26,7 @@ import {
   HomeIcon,
   PlusIcon,
   SettingsIcon,
+  ShieldIcon,
 } from "@/components/ui/icons";
 import { usePlan } from "@/components/billing/use-plan";
 import { DEFAULT_PLAN_ID, PLANS, type PlanId } from "@/config/plans";
@@ -57,6 +59,7 @@ function PlanBadge({ plan }: { plan: PlanId }) {
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, getIdToken } = useAuth();
   const { plan: currentPlan } = usePlan();
+  const isAdmin = useIsAdmin();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -322,6 +325,23 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <HelpIcon size={16} />
             Ndihmë &amp; Mbështetje
           </Link>
+          {/*
+            Shown only to admins. Purely cosmetic — /admin and every admin API
+            route re-check the allow-list on the server, so hiding this link is
+            convenience, not security. Rendered only once the answer is known, to
+            avoid the link appearing and then vanishing.
+          */}
+          {isAdmin === true ? (
+            <Link
+              href="/admin"
+              {...navProps}
+              aria-current={pathname === "/admin" ? "page" : undefined}
+              className={navRowClass(pathname === "/admin")}
+            >
+              <ShieldIcon size={16} />
+              Administrimi
+            </Link>
+          ) : null}
         </nav>
 
         {/* Upgrade card */}

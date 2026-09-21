@@ -272,3 +272,13 @@ export function BulbIcon(props: IconProps) {
     </Icon>
   );
 }
+
+/** Shield, for the admin area. */
+export function ShieldIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 3l7 3v6c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6l7-3Z" />
+      <path d="M9.5 12l1.8 1.8 3.4-3.6" />
+    </Icon>
+  );
+}

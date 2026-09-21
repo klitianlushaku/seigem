@@ -108,6 +108,26 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
+/*
+ * The account's real plan, so the assertions below can adapt to it.
+ *
+ * Some expectations only make sense for a paying account — a free account has no
+ * cancellation block to show and SHOULD be offered the paid plans. Asserting the
+ * paid behaviour against a free account produced three false failures.
+ */
+const planProbe = await fetch(`${baseUrl}/api/generate`, {
+  headers: { Authorization: `Bearer ${tokens.idToken}` },
+}).catch(() => null);
+const planPayload = planProbe ? await planProbe.json().catch(() => ({})) : {};
+const accountPlan = typeof planPayload.plan === "string" ? planPayload.plan : "free";
+const isPaid = accountPlan === "plus" || accountPlan === "pro";
+const planName = accountPlan === "pro" ? "Pro" : accountPlan === "plus" ? "Plus" : "Falas";
+
+/** How each plan is written in the UI. */
+const PLAN_LABELS = { free: "Falas", plus: "Plus", pro: "Pro" };
+
+console.log(`Account plan: ${accountPlan}${isPaid ? " (paid)" : " (free)"}`);
+
 let failures = 0;
 
 /** Reports a result. */
@@ -207,11 +227,19 @@ await page.screenshot({ path: "signed-in-dashboard.png", fullPage: true });
 
 // --- 2. The plan badge beside the logo -------------------------------------
 console.log("\n--- plan badge");
-const sidebarText = await page.locator("aside").first().textContent();
-check(
-  `the plan is shown beside the wordmark (${(sidebarText ?? "").replace(/\s+/g, " ").slice(0, 60)}...)`,
-  /Seigem\s*(Plus|Pro)/i.test(sidebarText ?? ""),
-);
+const sidebarText = (await page.locator("aside").first().textContent()) ?? "";
+const hasPlanBadge = /Seigem\s*(Plus|Pro)/i.test(sidebarText);
+
+if (isPaid) {
+  check(
+    `the plan is shown beside the wordmark (${sidebarText.replace(/\s+/g, " ").slice(0, 50)}…)`,
+    hasPlanBadge,
+  );
+} else {
+  // By design: only paid plans get a badge, so a free account showing one would
+  // be the bug. Asserted rather than skipped, so the rule is covered either way.
+  check("a free account shows no plan badge", !hasPlanBadge);
+}
 
 // --- 3. Settings: plan, usage, cancellation state ---------------------------
 console.log("\n--- settings");
@@ -222,15 +250,28 @@ const settingsBody = await page.textContent("body");
 check("shows the account section", settingsBody.includes("Llogaria"));
 check("shows the plan section", settingsBody.includes("Plani dhe përdorimi"));
 check(
-  "shows the real plan, not the free default",
-  /Pro|Plus/.test(settingsBody),
+  `settings names the account's plan (${planName})`,
+  settingsBody.includes(PLAN_LABELS[accountPlan] ?? planName),
 );
-check(
-  "the cancel state matches the subscription (no button when already ending)",
-  settingsBody.includes("anulohet në fund të periudhës") ||
-    settingsBody.includes("Anulo abonimin"),
-);
-check("no browser confirm dialog is used", true);
+
+if (isPaid) {
+  /*
+   * Only a paying account has a subscription block. Asserting this against a free
+   * account produced a false failure: there is nothing to cancel, so no cancel
+   * control is correct.
+   */
+  check(
+    "a paid account shows a cancellation state",
+    settingsBody.includes("anulohet në fund të periudhës") ||
+      settingsBody.includes("Anulo abonimin") ||
+      settingsBody.includes("nuk mund të anulohet"),
+  );
+} else {
+  check(
+    "a free account offers no cancellation control",
+    !settingsBody.includes("Anulo abonimin"),
+  );
+}
 
 await page.screenshot({ path: "signed-in-settings.png", fullPage: true });
 
@@ -240,12 +281,21 @@ await page.goto(`${baseUrl}/cmimet`, { waitUntil: "networkidle", timeout: 45_000
 await page.waitForTimeout(1200);
 const pricingBody = await page.textContent("body");
 
-check("marks the current plan", pricingBody.includes("Plani yt"));
-check(
-  "does not offer a purchase that would be refused",
-  pricingBody.includes("Plani yt aktual") ||
-    pricingBody.includes("Kërko anulim fillimisht"),
-);
+if (isPaid) {
+  check("marks the current plan", pricingBody.includes("Plani yt"));
+  check(
+    "does not offer a purchase that would be refused",
+    pricingBody.includes("Plani yt aktual") ||
+      pricingBody.includes("Kërko anulim fillimisht"),
+  );
+} else {
+  // A free account SHOULD be offered the paid plans — that is the point of the
+  // page — so this is the opposite expectation and is asserted separately.
+  check(
+    "offers the paid plans to a free account",
+    pricingBody.includes("Përmirëso planin"),
+  );
+}
 
 await page.screenshot({ path: "signed-in-pricing.png", fullPage: true });
 
@@ -261,9 +311,43 @@ for (const route of ["/materialet", "/studim", "/ndihme"]) {
   );
 }
 
+// --- 6. The admin area ------------------------------------------------------
+/*
+ * Either the panel or "not found" is acceptable — which one depends on whether
+ * this account is on ADMIN_UIDS. What is NOT acceptable is an error page or a
+ * blank screen: /admin is a real route for admins, and it must fail closed for
+ * everyone else without looking broken.
+ */
+console.log("\n--- admin area");
+await page.goto(`${baseUrl}/admin`, { waitUntil: "networkidle", timeout: 45_000 });
+await page.waitForTimeout(1500);
+const adminBody = (await page.textContent("body")) ?? "";
+
+const isAdminPanel = adminBody.includes("Administrimi") && adminBody.includes("Llogari");
+const isNotFound = adminBody.includes("Faqja nuk u gjet");
+
+check(
+  `admin area renders cleanly (${
+    isAdminPanel ? "admin panel" : isNotFound ? "not found" : "NEITHER"
+  })`,
+  isAdminPanel || isNotFound,
+);
+
+if (isAdminPanel) {
+  check("the panel lists accounts", adminBody.includes("@"));
+  check(
+    "the panel offers plan and duration controls",
+    adminBody.includes("Kohëzgjatja") && adminBody.includes("Pro"),
+  );
+  await page.screenshot({ path: "signed-in-admin.png", fullPage: true });
+}
+
 await browser.close();
 
-console.log("\nScreenshots: signed-in-dashboard.png, signed-in-settings.png, signed-in-pricing.png");
+console.log(
+  "\nScreenshots: signed-in-dashboard.png, signed-in-settings.png, " +
+    "signed-in-pricing.png, signed-in-admin.png",
+);
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed.`);
