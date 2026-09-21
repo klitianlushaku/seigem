@@ -225,15 +225,17 @@ export default function SettingsPage() {
               <p className="mt-2 text-xs text-stat-orange">
                 Plani yt mbetet aktiv deri në këtë datë. Nuk do të ketë rinovim tjetër.
               </p>
-            ) : linkCleared ? (
+            ) : !subscription?.hasSubscription || linkCleared ? (
               /*
-                The stored subscription was not one Whop recognised, so the
-                server cleared the link. The cancel action is hidden rather than
-                offered again: it can never succeed from here.
+                No cancellable subscription is linked to this account: either one
+                was never recorded, or the stored link was stale and the server
+                cleared it. The button is hidden rather than offered, because
+                there is nothing for it to act on. Retrying a stale link can
+                never succeed.
               */
-              <p className="mt-2 text-xs text-muted">
-                Abonimi nuk mund të anulohet nga këtu. Shkruaj në mbështetje dhe
-                e rregullojmë.
+              <p className="mt-2 text-xs leading-5 text-muted">
+                Ky abonim nuk është i lidhur me Whop, kështu që nuk mund të
+                anulohet nga këtu. Shkruaj në mbështetje dhe e rregullojmë.
               </p>
             ) : (
               <Button
