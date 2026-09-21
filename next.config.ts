@@ -1,5 +1,36 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+
+/**
+ * Runtime dependencies of firebase-admin, derived from package-lock.json by
+ * `scripts/generate-tracing-includes.mjs`.
+ *
+ * `server/firebase/admin-loader.cjs` loads the SDK by filesystem path at
+ * runtime, so nothing statically imports it. Next.js builds the deployed
+ * function from a FILE TRACE, and an unimported package is not traced — the
+ * trace held 1 firebase-admin entry and zero `jose` / `jwks-rsa` files, so on
+ * Vercel the package was missing when the loader looked for it and every
+ * authenticated request failed with "the service is not configured correctly".
+ *
+ * Regenerate after changing dependencies:
+ *   node scripts/generate-tracing-includes.mjs
+ */
+function firebaseAdminTracingIncludes(): Record<string, string[]> {
+  try {
+    const file = path.join(__dirname, "tracing-includes.generated.json");
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+      includes?: string[];
+    };
+    const includes = parsed.includes ?? [];
+    if (includes.length === 0) return {};
+    return { "/api/**": includes };
+  } catch {
+    // A missing or malformed file must not break the build. The integration
+    // test `tests/verify-tracing-includes.mjs` catches this case explicitly.
+    return {};
+  }
+}
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -44,6 +75,11 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [{ source: "/", destination: "/dashboard", permanent: false }];
   },
+  /**
+   * Copy the Admin SDK and its transitive dependencies into every server
+   * function. See `firebaseAdminTracingIncludes` above for the full explanation.
+   */
+  outputFileTracingIncludes: firebaseAdminTracingIncludes(),
   // Uploaded documents are parsed in the browser, so API routes only ever
   // receive structured text payloads. Keep the request body limit modest.
   experimental: {

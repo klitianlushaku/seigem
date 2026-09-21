@@ -35,7 +35,10 @@
     "test:security": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/security.test.ts",
     "test:dashboard": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/dashboard-render.test.tsx",
     "test:summary": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/summary.test.ts",
-    "test:whop-webhook": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/whop-webhook.test.ts"
+    "test:whop-webhook": "node --import ./tests/register-loader.mjs --test --experimental-strip-types tests/whop-webhook.test.ts",
+    "test:tracing": "node tests/verify-tracing-includes.mjs",
+    "test:admin-loader": "node tests/verify-admin-loader.mjs",
+    "tracing:generate": "node scripts/generate-tracing-includes.mjs"
   },
   "dependencies": {
     "firebase": "^12.19.0",
