@@ -161,20 +161,63 @@ export function resolveEntitlement(
   planForProduct: (productId: string) => PlanId,
   now: Date = new Date(),
 ): EntitlementEffect {
-  // An expired period means access has lapsed, regardless of status.
-  if (snapshot.expiresAt && snapshot.expiresAt.getTime() <= now.getTime()) {
+  const expiresAtMs = snapshot.expiresAt?.getTime() ?? null;
+  const status = snapshot.status?.toLowerCase() ?? null;
+
+  /*
+   * PAID TIME REMAINING IS DECISIVE — but only for statuses that mean "still
+   * entitled".
+   *
+   * A running paid period must keep access for an ACTIVE subscription, and
+   * equally for a CANCELLED one. Whop reports a cancelled subscription as
+   * `status: "canceled"` with `cancel_at_period_end: false` and a FUTURE
+   * `current_period_end`. Checking status first revoked the customer on the spot:
+   * they cancelled and immediately lost the weeks they had already paid for.
+   * Cancelling stops the RENEWAL; it neither refunds nor shortens the period
+   * already bought.
+   *
+   * Deliberately NOT applied to statuses that signal a problem rather than an
+   * ending — `past_due`, `expired`, `disputed` — which must still revoke even if
+   * a period end is recorded. Nor to a payload with no status at all, which
+   * remains "ignore" rather than a guess.
+   */
+  const STATUSES_THAT_KEEP_ACCESS_WHILE_PAID: readonly string[] = [
+    ...ACTIVE_STATUSES,
+    "canceled",
+    "cancelled",
+  ];
+
+  if (
+    expiresAtMs !== null &&
+    expiresAtMs > now.getTime() &&
+    status !== null &&
+    STATUSES_THAT_KEEP_ACCESS_WHILE_PAID.includes(status)
+  ) {
+    if (!snapshot.productId) {
+      return { type: "ignore", reason: "paid period remaining but no product id" };
+    }
+
+    const plan = planForProduct(snapshot.productId);
+    if (plan === DEFAULT_PLAN_ID) {
+      return { type: "ignore", reason: "unknown product id" };
+    }
+
+    return { type: "grant", plan };
+  }
+
+  // A period end in the past means access has lapsed, regardless of status.
+  if (expiresAtMs !== null && expiresAtMs <= now.getTime()) {
     return { type: "revoke" };
   }
 
-  const status = snapshot.status?.toLowerCase() ?? null;
-
-  // No usable status: leave entitlement untouched rather than guessing.
+  // No usable status: leave entitlement untouched.
   if (!status) {
     return { type: "ignore", reason: "missing subscription status" };
   }
 
   if (!ACTIVE_STATUSES.includes(status)) {
-    // cancelled / expired / past_due / disputed / etc. all remove paid access.
+    // past_due / expired / disputed / deactivated, and cancelled with nothing
+    // paid remaining, all mean no paid access.
     return { type: "revoke" };
   }
 

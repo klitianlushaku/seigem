@@ -130,6 +130,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         subscription.expiresAt.getTime() > Date.now(),
     );
 
+    /*
+     * Paid time still to run, whatever the status says.
+     *
+     * Whop records a cancelled subscription as `status: "canceled"` with
+     * `cancel_at_period_end: false` and a FUTURE `current_period_end`. Revoking
+     * on that event takes away weeks the customer has already paid for.
+     * Cancelling stops the renewal; it does not shorten the period.
+     */
+    const paidTimeRemaining = Boolean(
+      subscription.expiresAt && subscription.expiresAt.getTime() > Date.now(),
+    );
+
     if (entitlement.type === "ignore") {
       console.info(`[billing] ignoring event for ${uid}: ${entitlement.reason}`);
       return NextResponse.json(
@@ -140,7 +152,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     if (
       (entitlement.type === "revoke" || eventKind === "revoke") &&
-      !scheduledCancellation
+      !scheduledCancellation &&
+      !paidTimeRemaining
     ) {
       /*
        * The subscription id is passed so the revoke can be checked against the
@@ -175,11 +188,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    /*
+     * Whether the subscription is set to end rather than renew.
+     *
+     * Whop expresses this two different ways: the `cancel_at_period_end` flag,
+     * and a `canceled` / `canceling` status. A cancelled subscription still
+     * carries a future period end, so the flag alone is not enough — reading only
+     * the flag left the settings page offering a cancel button for a membership
+     * that was already cancelled.
+     */
+    const statusLower = subscription.status?.toLowerCase() ?? "";
+    const endScheduled =
+      subscription.cancelAtPeriodEnd ||
+      statusLower === "canceled" ||
+      statusLower === "canceling";
+
     await applySubscriptionUpdate(uid, {
       plan: scheduledPlan,
       planExpiresAt: subscription.expiresAt,
       whopSubscriptionId: subscription.subscriptionId,
-      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+      cancelAtPeriodEnd: endScheduled,
     });
 
     return NextResponse.json(

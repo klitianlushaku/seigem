@@ -93,7 +93,15 @@ async function deliver(type, data) {
 }
 
 /** Builds membership data in the shape the webhook carries. */
-function membershipData({ id, productId, status, uid, cancelAtPeriodEnd = false }) {
+function membershipData({
+  id,
+  productId,
+  status,
+  uid,
+  cancelAtPeriodEnd = false,
+  /** ISO end of the paid period. Defaults to a month out. */
+  renewalPeriodEnd = new Date(Date.now() + 30 * 864e5).toISOString(),
+}) {
   return {
     id,
     status,
@@ -101,7 +109,7 @@ function membershipData({ id, productId, status, uid, cancelAtPeriodEnd = false 
     plan: { id: "plan_audit", metadata: null },
     metadata: { seigem_uid: uid },
     cancel_at_period_end: cancelAtPeriodEnd,
-    renewal_period_end: new Date(Date.now() + 30 * 864e5).toISOString(),
+    renewal_period_end: renewalPeriodEnd,
   };
 }
 
@@ -125,18 +133,22 @@ const users = await db.collection("users").get();
 const sandbox = users.docs
   .map((doc) => ({ uid: doc.id, data: doc.data() }))
   .find((u) => {
-    if (u.data.plan !== "free") return false;
     const sub = u.data.whopSubscriptionId;
-    if (!sub) return true;
-    // Only our own synthetic ids qualify.
-    return typeof sub === "string" && sub.startsWith("mem_audit_");
+
+    // A synthetic id proves a previous audit run created this state, so the
+    // account belongs to the audit whatever plan it is currently left on.
+    if (typeof sub === "string" && sub.startsWith("mem_audit_")) return true;
+
+    // Otherwise only a free account with no subscription at all is safe.
+    return u.data.plan === "free" && !sub;
   });
 
 if (!sandbox) {
   console.error(
-    "No free account WITHOUT a real subscription is available to use as a\n" +
-      "sandbox. Refusing to run: this audit must not touch a paying customer.\n\n" +
-      "Create a throwaway account, or reset an existing free one, then re-run.",
+    "No account is available to use as a sandbox. Refusing to run: this audit\n" +
+      "must not touch a paying customer.\n\n" +
+      "It needs either a free account with no subscription, or one left behind by\n" +
+      "a previous run (identified by a `mem_audit_*` subscription id).",
   );
   process.exit(1);
 }
@@ -144,6 +156,20 @@ if (!sandbox) {
 const uid = sandbox.uid;
 console.log(`Sandbox account: ${uid} (${sandbox.data.email ?? "no email"})`);
 console.log(`Target: ${baseUrl}\n`);
+
+/*
+ * Reset the sandbox to a known state before running.
+ *
+ * Scenarios build on each other, so a leftover plan or subscription link from an
+ * interrupted run would make the results depend on history rather than on the
+ * code. This writes only the two billing fields, on an account already proven to
+ * be free and without a real subscription.
+ */
+await db.collection("users").doc(uid).set(
+  { plan: "free", whopSubscriptionId: null, cancelAtPeriodEnd: false },
+  { merge: true },
+);
+console.log("Sandbox reset to free with no subscription link.\n");
 
 const MEMBERSHIP_A = "mem_audit_old_0001";
 const MEMBERSHIP_B = "mem_audit_new_0002";
@@ -226,7 +252,10 @@ console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0
 check("stale activation does NOT downgrade", (await stateOf(uid)).plan, "pro");
 
 // --- Scenario 5: deactivating the CURRENT subscription DOES downgrade -------
-console.log("\n--- 5. the current subscription ending does downgrade");
+console.log(
+  "\n--- 5. the current subscription ENDING does downgrade\n" +
+    "        (the paid period has passed, so nothing is owed)",
+);
 result = await deliver(
   "membership.deactivated",
   membershipData({
@@ -234,6 +263,9 @@ result = await deliver(
     productId: env.WHOP_PRO_PRODUCT_ID,
     status: "deactivated",
     uid,
+    // Genuinely finished: a deactivation while paid time still runs keeps
+    // access, which scenario 10 covers.
+    renewalPeriodEnd: new Date(Date.now() - 864e5).toISOString(),
   }),
 );
 console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 80)}`);
@@ -293,33 +325,76 @@ result = await deliver(
 console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 80)}`);
 check("scheduled cancellation keeps the plan", (await stateOf(uid)).plan, "plus");
 
-// --- Restore the sandbox ----------------------------------------------------
-console.log("\n--- restoring the sandbox account to free");
-await deliver(
+// --- Scenario 9: cancelled status, but the period is PAID for ---------------
+console.log(
+  "\n--- 9. Whop reports status 'canceled' with a FUTURE period end\n" +
+    "        (a period-end cancellation: the customer paid through that date\n" +
+    "         and must keep access until it passes)",
+);
+result = await deliver(
+  "membership.updated",
+  membershipData({
+    id: MEMBERSHIP_A,
+    productId: env.WHOP_PLUS_PRODUCT_ID,
+    status: "canceled",
+    uid,
+    cancelAtPeriodEnd: true,
+    // A month of paid time still to run.
+    renewalPeriodEnd: new Date(Date.now() + 30 * 864e5).toISOString(),
+  }),
+);
+console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 90)}`);
+check("paid-but-cancelled keeps access", (await stateOf(uid)).plan, "plus");
+
+// --- Scenario 10: status canceled AND cancel_at_period_end false ------------
+console.log(
+  "\n--- 10. status 'canceled' with cancel_at_period_end FALSE, but a FUTURE\n" +
+    "        period end -- exactly what Whop stores for a cancelled subscription\n" +
+    "        that still has paid time left",
+);
+result = await deliver(
   "membership.deactivated",
   membershipData({
     id: MEMBERSHIP_A,
     productId: env.WHOP_PLUS_PRODUCT_ID,
-    status: "deactivated",
+    status: "canceled",
     uid,
+    cancelAtPeriodEnd: false,
+    renewalPeriodEnd: new Date(Date.now() + 30 * 864e5).toISOString(),
   }),
+);
+console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 90)}`);
+check("cancelled but still paid keeps access", (await stateOf(uid)).plan, "plus");
+
+// --- Scenario 11: the paid period has actually ENDED ------------------------
+console.log(
+  "\n--- 11. the paid period has passed\n" +
+    "        (now the plan must drop)",
+);
+result = await deliver(
+  "membership.deactivated",
+  membershipData({
+    id: MEMBERSHIP_A,
+    productId: env.WHOP_PLUS_PRODUCT_ID,
+    status: "canceled",
+    uid,
+    cancelAtPeriodEnd: false,
+    // Ended yesterday.
+    renewalPeriodEnd: new Date(Date.now() - 864e5).toISOString(),
+  }),
+);
+console.log(`        HTTP ${result.status} ${JSON.stringify(result.body).slice(0, 90)}`);
+check("an ended period drops the plan", (await stateOf(uid)).plan, "free");
+
+// --- Scenario 12: restore --------------------------------------------------
+console.log("\n--- restoring the sandbox account to free");
+await db.collection("users").doc(uid).set(
+  { plan: "free", whopSubscriptionId: null, cancelAtPeriodEnd: false },
+  { merge: true },
 );
 
 const finalState = await stateOf(uid);
 console.log(`        plan=${finalState.plan} sub=${finalState.sub}`);
-
-/*
- * The synthetic subscription link is removed as well as the plan, so the account
- * returns to exactly its pre-audit state. Leaving it behind is what made the
- * previous run unable to find a sandbox.
- */
-if (typeof finalState.sub === "string" && finalState.sub.startsWith("mem_audit_")) {
-  await db.collection("users").doc(uid).set(
-    { whopSubscriptionId: null, cancelAtPeriodEnd: false },
-    { merge: true },
-  );
-  console.log("        synthetic subscription link cleared");
-}
 
 if (finalState.plan !== "free") {
   console.log(

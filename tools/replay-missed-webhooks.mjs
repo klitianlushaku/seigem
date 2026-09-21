@@ -91,7 +91,23 @@ const memberships = (await response.json()).data ?? [];
 const byUid = new Map();
 
 for (const membership of memberships) {
-  if (!["active", "trialing", "canceling"].includes(membership.status)) continue;
+  /*
+   * A membership counts when the customer is still OWED access: either it is
+   * live, or it has been cancelled but its paid period has not ended.
+   *
+   * The second case matters because a cancellation used to revoke access
+   * immediately, so customers who cancelled lost time they had already paid for.
+   * The membership records a future `current_period_end`, which is exactly the
+   * evidence that they are still owed it.
+   */
+  const periodEndsAt = membership.current_period_end
+    ? new Date(membership.current_period_end).getTime()
+    : null;
+
+  const live = ["active", "trialing", "canceling"].includes(membership.status);
+  const paidTimeRemaining = periodEndsAt !== null && periodEndsAt > Date.now();
+
+  if (!live && !paidTimeRemaining) continue;
 
   const uid = membership.metadata?.seigem_uid;
   if (typeof uid !== "string" || !uid) {

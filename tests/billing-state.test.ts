@@ -98,6 +98,54 @@ describe("access removal", () => {
     assert.equal(effect.type, "revoke");
   });
 
+  /*
+   * Cancelling stops the RENEWAL. It does not shorten the period already paid
+   * for, so a cancelled subscription with time left on it keeps its access.
+   *
+   * Whop stores a cancelled subscription as `status: "canceled"` with
+   * `cancel_at_period_end: false` and a FUTURE `current_period_end`. Treating the
+   * status alone as decisive revoked the customer the moment they cancelled,
+   * taking away weeks they had already paid for.
+   */
+  it("KEEPS access when cancelled but the paid period is still running", () => {
+    const effect = resolveEntitlement(
+      snapshot({
+        status: "canceled",
+        cancelAtPeriodEnd: false,
+        expiresAt: new Date("2026-04-10T12:00:00Z"),
+      }),
+      planForProduct,
+      NOW,
+    );
+    assert.deepEqual(effect, { type: "grant", plan: "plus" });
+  });
+
+  it("keeps access for a scheduled cancellation", () => {
+    const effect = resolveEntitlement(
+      snapshot({
+        status: "canceling",
+        cancelAtPeriodEnd: true,
+        expiresAt: new Date("2026-04-10T12:00:00Z"),
+      }),
+      planForProduct,
+      NOW,
+    );
+    assert.deepEqual(effect, { type: "grant", plan: "plus" });
+  });
+
+  it("revokes once that paid period actually ends", () => {
+    const effect = resolveEntitlement(
+      snapshot({
+        status: "canceled",
+        cancelAtPeriodEnd: false,
+        expiresAt: new Date("2026-03-09T12:00:00Z"),
+      }),
+      planForProduct,
+      NOW,
+    );
+    assert.deepEqual(effect, { type: "revoke" });
+  });
+
   it("revokes on expired status", () => {
     const effect = resolveEntitlement(
       snapshot({ status: "expired" }),

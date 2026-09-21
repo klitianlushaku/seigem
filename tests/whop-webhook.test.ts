@@ -171,7 +171,11 @@ describe("Whop webhook payloads (shape verified against Whop's OpenAPI spec)", (
   });
 
   it("revokes on a past_due or expired status", () => {
-    for (const status of ["past_due", "expired", "canceled"]) {
+    // NOTE: "canceled" is deliberately NOT in this list. It used to be, and that
+    // expectation encoded a bug: Whop reports a cancelled subscription with a
+    // FUTURE period end, so revoking on the status alone took away weeks the
+    // customer had already paid for. See the cancellation tests below.
+    for (const status of ["past_due", "expired"]) {
       const snapshot = readSubscription(whopPayload({ status }));
       assert.deepEqual(
         resolveEntitlement(snapshot, planForProduct),
@@ -179,6 +183,39 @@ describe("Whop webhook payloads (shape verified against Whop's OpenAPI spec)", (
         `status "${status}" should revoke`,
       );
     }
+  });
+
+  /*
+   * Cancelling stops the RENEWAL. It does not shorten the period already paid
+   * for, so a cancelled subscription with time left keeps access until that time
+   * runs out.
+   */
+  it("KEEPS access for a cancelled subscription that is still paid up", () => {
+    const snapshot = readSubscription(
+      whopPayload({
+        status: "canceled",
+        cancelAtPeriodEnd: false,
+        // A month of paid time still to run.
+        renewalPeriodEnd: "2099-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.deepEqual(resolveEntitlement(snapshot, planForProduct), {
+      type: "grant",
+      plan: "plus",
+    });
+  });
+
+  it("revokes a cancelled subscription once its paid period passes", () => {
+    const snapshot = readSubscription(
+      whopPayload({
+        status: "canceled",
+        cancelAtPeriodEnd: false,
+        renewalPeriodEnd: "2020-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.deepEqual(resolveEntitlement(snapshot, planForProduct), {
+      type: "revoke",
+    });
   });
 
   it("still grants for trialing and canceling statuses", () => {
