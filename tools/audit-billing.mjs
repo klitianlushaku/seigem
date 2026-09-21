@@ -113,19 +113,30 @@ async function stateOf(uid) {
 
 // --- Pick a sandbox account -------------------------------------------------
 /*
- * The account must be on the free plan and hold no subscription, so the audit
- * cannot disturb a paying customer. Synthetic membership ids are used, and the
- * account is returned to free at the end.
+ * The account must be on the free plan and hold no REAL subscription, so the
+ * audit cannot disturb a paying customer.
+ *
+ * A leftover synthetic link (`mem_audit_*`) from a previous run is accepted,
+ * because the restore below leaves one behind and the account is otherwise
+ * unusable as a sandbox. Real membership ids are never accepted, whatever the
+ * plan says — that is the check that keeps this tool away from customers.
  */
 const users = await db.collection("users").get();
 const sandbox = users.docs
   .map((doc) => ({ uid: doc.id, data: doc.data() }))
-  .find((u) => u.data.plan === "free" && !u.data.whopSubscriptionId);
+  .find((u) => {
+    if (u.data.plan !== "free") return false;
+    const sub = u.data.whopSubscriptionId;
+    if (!sub) return true;
+    // Only our own synthetic ids qualify.
+    return typeof sub === "string" && sub.startsWith("mem_audit_");
+  });
 
 if (!sandbox) {
   console.error(
-    "No free account without a subscription is available to use as a sandbox.\n" +
-      "Refusing to run: this audit must not touch a paying customer.",
+    "No free account WITHOUT a real subscription is available to use as a\n" +
+      "sandbox. Refusing to run: this audit must not touch a paying customer.\n\n" +
+      "Create a throwaway account, or reset an existing free one, then re-run.",
   );
   process.exit(1);
 }
@@ -296,6 +307,19 @@ await deliver(
 
 const finalState = await stateOf(uid);
 console.log(`        plan=${finalState.plan} sub=${finalState.sub}`);
+
+/*
+ * The synthetic subscription link is removed as well as the plan, so the account
+ * returns to exactly its pre-audit state. Leaving it behind is what made the
+ * previous run unable to find a sandbox.
+ */
+if (typeof finalState.sub === "string" && finalState.sub.startsWith("mem_audit_")) {
+  await db.collection("users").doc(uid).set(
+    { whopSubscriptionId: null, cancelAtPeriodEnd: false },
+    { merge: true },
+  );
+  console.log("        synthetic subscription link cleared");
+}
 
 if (finalState.plan !== "free") {
   console.log(
