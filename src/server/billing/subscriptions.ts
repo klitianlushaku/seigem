@@ -178,13 +178,26 @@ export async function findUidBySubscriptionId(
 /**
  * Resolves the Seigem uid for a webhook.
  *
- * Lookup order matters for safety:
- *   1. A uid embedded in checkout metadata, but ONLY if that user's stored
- *      subscription id matches the event (or is still empty). This prevents an
- *      attacker who controls checkout metadata from claiming another account.
- *   2. The stored link from a previous event.
+ * The uid in the checkout metadata is PREFERRED, and trusted.
  *
- * @returns The uid, or null when the account cannot be identified.
+ * That metadata is written by our own checkout endpoint, from the uid of the
+ * caller's verified Firebase token — a client cannot choose it. The webhook
+ * carrying it back is signature-verified. So the account id is authoritative
+ * twice over, and cannot be forged or aimed at somebody else's account.
+ *
+ * The stored subscription id is a FALLBACK, for events that arrive without
+ * metadata.
+ *
+ * HISTORY — this cost real customers their plans. The original logic refused the
+ * metadata whenever the account already had a DIFFERENT subscription id stored,
+ * then fell back to looking the account up by the new subscription id, which by
+ * definition matches nothing yet. So a customer who had ever subscribed before —
+ * including a cancelled, expired or failed attempt — could never be upgraded
+ * again: the metadata was discarded, the fallback found no account, and the paid
+ * event was dropped with "PAID EVENT NOT APPLIED". The customer paid and
+ * received nothing, repeatedly.
+ *
+ * @returns The uid, or null when the account genuinely cannot be identified.
  */
 export async function resolveWebhookUid(
   subscriptionId: string | null,
@@ -192,19 +205,31 @@ export async function resolveWebhookUid(
 ): Promise<string | null> {
   if (metadataUid) {
     const snapshot = await usersCollection().doc(metadataUid).get();
+
     if (snapshot.exists) {
       const stored = snapshot.data()?.[FIELDS.whopSubscriptionId];
 
-      // Accept when there is no link yet, or the link matches this event.
-      if (!stored || !subscriptionId || stored === subscriptionId) {
-        return metadataUid;
+      // A disagreement is worth recording — it usually means a previous
+      // subscription was replaced — but it is NOT a reason to drop a paid event.
+      if (stored && subscriptionId && stored !== subscriptionId) {
+        console.warn(
+          `[billing] replacing subscription ${stored} with ${subscriptionId} ` +
+            `for ${metadataUid}`,
+        );
       }
-      // Otherwise the metadata disagrees with our records: fall through to the
-      // authoritative lookup rather than trusting the metadata.
-      console.warn(
-        "[billing] checkout metadata uid does not match stored subscription; using stored link",
-      );
+
+      return metadataUid;
     }
+
+    /*
+     * The metadata names an account that has no user document. That is the one
+     * case where a legitimate payment cannot be applied, and it is logged at
+     * error level because money has moved.
+     */
+    console.error(
+      `[billing] checkout metadata names uid ${metadataUid}, which has no user ` +
+        "document; falling back to the stored subscription link",
+    );
   }
 
   if (subscriptionId) {
