@@ -59,7 +59,6 @@ check(includes.length > 0, `include list is non-empty (${includes.length} patter
 const REQUIRED_PACKAGES = [
   "firebase-admin",
   "jwks-rsa",
-  "jose",
   "@google-cloud/firestore",
   "google-auth-library",
   "jsonwebtoken",
@@ -71,6 +70,37 @@ for (const name of REQUIRED_PACKAGES) {
     `include list covers ${name}`,
   );
 }
+
+/**
+ * `jose` may be hoisted OR nested under `jwks-rsa`, depending on how npm
+ * dedupes the overridden version. Both are valid; what matters is that some
+ * include pattern covers it, since `jwks-rsa` requires it at runtime.
+ */
+check(
+  includes.some((pattern) => /(^|\/)node_modules\/jose\/\*\*$/.test(pattern)),
+  "include list covers jose (hoisted or nested under jwks-rsa)",
+);
+
+/**
+ * Nested dependency found only after a real deployment failure:
+ *
+ *   products.firestore.error = Cannot find module '@js-sdsl/ordered-map'
+ *     - .../firestore-api/node_modules/@grpc/grpc-js/build/src/channelz.js
+ *
+ * `@grpc/grpc-js` is duplicated under `@google-cloud/firestore-api`, and that
+ * nested copy requires `@js-sdsl/ordered-map`. An earlier generator walked only
+ * top-level packages and missed it, which broke `firestore` while `app` and
+ * `auth` still worked.
+ */
+check(
+  includes.includes("./node_modules/@js-sdsl/ordered-map/**"),
+  "include list covers @js-sdsl/ordered-map (required by nested @grpc/grpc-js)",
+);
+
+check(
+  includes.some((pattern) => pattern.includes("/node_modules/") && pattern.includes("/node_modules/") && pattern !== "./node_modules/"),
+  "include list covers nested packages, not just hoisted ones",
+);
 
 // --- 2. The build trace must actually contain the module files --------------
 const tracePath = path.join(
@@ -118,6 +148,17 @@ check(
 check(
   files.some((f) => f.includes("/jose/")),
   "trace contains the jose package (required by jwks-rsa)",
+);
+
+// The exact module whose absence broke Firestore after the first tracing fix.
+check(
+  files.some((f) => f.includes("js-sdsl")),
+  "trace contains @js-sdsl/ordered-map (required by nested @grpc/grpc-js)",
+);
+
+check(
+  files.filter((f) => f.includes("firestore-api/node_modules/@grpc")).length > 50,
+  "trace contains the NESTED @grpc/grpc-js copy, not only the hoisted one",
 );
 
 check(
