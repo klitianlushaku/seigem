@@ -10,29 +10,30 @@ const nextConfig: NextConfig = {
     root: path.resolve(__dirname),
   },
   /**
-   * `firebase-admin` is a CommonJS package whose `exports` map ALSO declares an
-   * ESM condition:
+   * Keep the Admin loader out of the bundle so NODE performs its `require`
+   * calls at runtime.
    *
-   *   "./auth": { "require": "./lib/auth/index.js",
-   *               "import":  "./lib/esm/auth/index.js" }
+   * This is the fix for the production failure where every route touching
+   * Firestore or Auth returned HTTP 500 with an EMPTY body:
    *
-   * The ESM files contain real `import`/`export` syntax but live in a package
-   * whose package.json has no `"type": "module"`, so Node classifies them as
-   * CommonJS and refuses to load them as ESM. When anything loads the package
-   * through the `import` condition, every protected route dies at import time:
-   *
-   *   Error: Failed to load external module firebase-admin-.../auth:
+   *   Error: Failed to load external module
+   *          firebase-admin-a14c8a5423a75469/auth:
    *          Error [ERR_REQUIRE_ESM]: require() of ES Module ... not supported
    *
-   * That surfaced as HTTP 500 with an EMPTY body, because the route threw while
-   * its imports were being evaluated and no handler ever ran.
+   * `firebase-admin` declares both a `require` and an `import` condition in its
+   * `exports` map, and the `import` target (`lib/esm/*`) is real ESM inside a
+   * package with no `"type": "module"`, so Node refuses to load it. The
+   * serverless loader picks that broken condition whenever the package is
+   * externalized or its specifier is rewritten by the bundler — which is why
+   * `serverExternalPackages`, deep specifiers, `createRequire`, and runtime
+   * path building all failed.
    *
-   * Keeping the package external (below) makes the serverless runtime load it
-   * with `require()`, which selects the CommonJS `require` condition and works.
-   * Verified: `require("firebase-admin/auth")` succeeds, while resolving the
-   * ESM condition is what fails.
+   * `admin-loader.cjs` is copied verbatim, so its `require` runs in Node and
+   * resolves the CommonJS build. Only the loader is listed here;
+   * `firebase-admin` itself must NOT be, since externalizing it is what
+   * produced the ERR_REQUIRE_ESM error in the first place.
    */
-  serverExternalPackages: ["firebase-admin"],
+  serverExternalPackages: ["./admin-loader.cjs"],
   /**
    * Seigem has no marketing home page: the app IS the dashboard.
    *

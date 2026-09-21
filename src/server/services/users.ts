@@ -177,7 +177,17 @@ function toDateOrNull(value: unknown): Date | null {
 }
 
 /**
- * Server timestamp helper for writes elsewhere in the app.
- * Re-exported so services share one clock source.
+ * Server timestamp helper.
+ *
+ * Deliberately a function rather than a re-exported constant: reading
+ * `FieldValue.serverTimestamp` at MODULE SCOPE would force firebase-admin to
+ * load while Next.js evaluates route modules during the build, where the package
+ * cannot be resolved. Calling it inside a write keeps the load lazy and confined
+ * to real requests.
+ *
+ * Nothing currently uses this; it is kept for callers that need a server clock
+ * and would otherwise reach for `firebase-admin` directly.
  */
-export const serverTimestamp = FieldValue.serverTimestamp;
+export function serverTimestamp(): unknown {
+  return FieldValue.serverTimestamp();
+}

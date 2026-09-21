@@ -4,60 +4,62 @@
  * The Admin SDK bypasses Firestore Security Rules, so this module must only
  * ever be imported from server code. `import "server-only"` turns an accidental
  * client import into a build error.
- *
- * Uses the modular `firebase-admin/app` + `firebase-admin/firestore` entry
- * points so the bundler can tree-shake unused Admin products.
  */
 import "server-only";
 
-import { createRequire } from "node:module";
-
 import { serverEnv } from "@/lib/env/server";
+// Relative on purpose (not the "@/" alias) so the path can be listed in
+// `serverExternalPackages`, which needs a real module specifier to match.
+// See the header of the loader for why it must stay out of the bundle.
+import {
+  getAdminApp as loadAdminApp,
+  getAdminAuth as loadAdminAuth,
+  getAdminDb as loadAdminDb,
+  Timestamp as getTimestamp,
+  FieldValue as getFieldValue,
+} from "./admin-loader.cjs";
 
 /**
- * Loads `firebase-admin` through CommonJS `require` instead of ESM `import`.
+ * Firestore `Timestamp` class.
  *
- * WHY THIS IS NECESSARY — this caused every protected /api route to return
- * HTTP 500 with an EMPTY body on Vercel, while passing locally:
+ * Resolved through a getter rather than re-exported directly, because reading it
+ * at MODULE LOAD time would force the Admin SDK to load while Next.js collects
+ * page data during the build. That build sandbox resolves packages differently
+ * from the deployed runtime and fails with "Cannot find module 'firebase-admin'"
+ * — and a build that never queries Firestore should not need the SDK at all.
  *
- * `firebase-admin` is a CommonJS package, but its `exports` map also declares an
- * ESM condition whose target is a generated wrapper:
- *
- *   "./auth": { "require": "./lib/auth/index.js",
- *               "import":  "./lib/esm/auth/index.js" }
- *
- * Those `lib/esm/*` files contain real `import`/`export` syntax, yet they sit in
- * a package whose package.json has no `"type": "module"`. Node therefore
- * classifies them as CommonJS and refuses to load them as ESM:
- *
- *   Error: Failed to load external module firebase-admin-.../auth:
- *          Error [ERR_REQUIRE_ESM]: require() of ES Module ... not supported
- *
- * The bundler externalizes the package and emits `import("firebase-admin/auth")`
- * for a static ESM import, which selects the broken `import` condition. Routing
- * through `createRequire` emits a `require()` call instead, so Node resolves the
- * `require` condition and loads the working CommonJS build.
- *
- * `require("firebase-admin/auth")` is verified to work; resolving the ESM
- * condition is what fails. Types still come from the normal import below, which
- * is type-only and erased at build time.
+ * Callers use it as `Timestamp.now()` / `Timestamp.fromDate(...)`, so exposing
+ * the class itself keeps existing call sites unchanged.
  */
-const nodeRequire = createRequire(import.meta.url);
+export const Timestamp = new Proxy(
+  class {},
+  {
+    construct: (_target, args: unknown[]) => {
+      const Real = getTimestamp() as unknown as new (...a: unknown[]) => object;
+      return new Real(...args);
+    },
+    get: (_target, property) => {
+      const Real = getTimestamp() as unknown as Record<string | symbol, unknown>;
+      return Real[property];
+    },
+  },
+) as unknown as typeof import("firebase-admin/firestore").Timestamp;
 
-type AdminAppModule = typeof import("firebase-admin/app");
-type AdminAuthModule = typeof import("firebase-admin/auth");
-type AdminFirestoreModule = typeof import("firebase-admin/firestore");
+/** Firestore `FieldValue` sentinel, lazily resolved for the same reason. */
+export const FieldValue = new Proxy(
+  {},
+  {
+    get: (_target, property) => {
+      const Real = getFieldValue() as unknown as Record<string | symbol, unknown>;
+      return Real[property];
+    },
+  },
+) as unknown as typeof import("firebase-admin/firestore").FieldValue;
 
-/** The Admin app type, taken from the package so it stays in sync. */
-type AdminApp = ReturnType<AdminAppModule["initializeApp"]>;
-type AdminAuth = ReturnType<AdminAuthModule["getAuth"]>;
-type AdminFirestore = ReturnType<AdminFirestoreModule["getFirestore"]>;
-
-const adminApp = nodeRequire("firebase-admin/app") as AdminAppModule;
-const adminAuth = nodeRequire("firebase-admin/auth") as AdminAuthModule;
-const adminFirestore = nodeRequire(
-  "firebase-admin/firestore",
-) as AdminFirestoreModule;
+/** The Admin app type, taken from the loader so it stays in sync. */
+type AdminApp = ReturnType<typeof loadAdminApp>;
+type AdminAuth = ReturnType<typeof loadAdminAuth>;
+type AdminFirestore = ReturnType<typeof loadAdminDb>;
 
 /** True when Admin credentials look like real values rather than placeholders. */
 export function hasAdminCredentials(): boolean {
@@ -75,42 +77,20 @@ export function hasAdminCredentials(): boolean {
  * Reuses an existing app so hot reloads do not re-initialize the SDK.
  */
 export function getAdminApp(): AdminApp {
-  const existing = adminApp.getApps();
-  const app = existing[0];
-  if (app) return app;
-
-  return adminApp.initializeApp({
-    credential: adminApp.cert({
-      projectId: serverEnv.firebaseProjectId,
-      clientEmail: serverEnv.firebaseClientEmail,
-      // Newlines were restored from the literal "\n" escapes by lib/env/server.
-      privateKey: serverEnv.firebasePrivateKey,
-    }),
+  return loadAdminApp({
+    projectId: serverEnv.firebaseProjectId,
+    clientEmail: serverEnv.firebaseClientEmail,
+    // Newlines were restored from the literal "\n" escapes by lib/env/server.
+    privateKey: serverEnv.firebasePrivateKey,
   });
 }
 
 /** Firebase Admin Auth instance. Used to verify ID tokens. */
 export function getAdminAuth(): AdminAuth {
-  return adminAuth.getAuth(getAdminApp());
+  return loadAdminAuth();
 }
 
 /** Firebase Admin Firestore instance. Bypasses security rules — use carefully. */
 export function getAdminDb(): AdminFirestore {
-  return adminFirestore.getFirestore(getAdminApp());
+  return loadAdminDb();
 }
-
-/**
- * Firestore sentinel/timestamp helpers, re-exported through this module.
- *
- * Every server file that needs `Timestamp` or `FieldValue` imports them from
- * HERE rather than from `firebase-admin/firestore` directly.
- *
- * Reason: a direct `import { Timestamp } from "firebase-admin/firestore"` is a
- * runtime value import, so the bundler emits an external ESM `import()` for it.
- * That selects firebase-admin's broken ESM condition and fails on Vercel with
- * `ERR_REQUIRE_ESM`, taking the whole route down with an empty 500. Routing them
- * through this module means the package is loaded exactly once, via the
- * CommonJS `require` established above, and every other consumer reuses it.
- */
-export const Timestamp = adminFirestore.Timestamp;
-export const FieldValue = adminFirestore.FieldValue;
