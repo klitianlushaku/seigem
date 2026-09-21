@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { UpgradeNotice } from "@/components/billing/upgrade-notice";
+import { WelcomePreview } from "@/components/dashboard/welcome-preview";
 import { StudyWorkflow } from "@/components/documents/study-workflow";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { FlashcardsPanel } from "@/components/dashboard/flashcards-panel";
@@ -55,7 +57,7 @@ const STUDY_GOAL_MINUTES = 10;
 const GOAL_DOTS = 6;
 
 export function DashboardOverview() {
-  const { getIdToken } = useAuth();
+  const { user, loading: authLoading, getIdToken } = useAuth();
 
   const [remaining, setRemaining] = useState<RemainingUsage | null>(null);
   const [studySets, setStudySets] = useState<StudySetSummary[]>([]);
@@ -138,6 +140,23 @@ export function DashboardOverview() {
     return () => window.removeEventListener(HISTORY_CHANGED, handler);
   }, [load]);
 
+  /*
+   * A signed-out visitor gets the product tour, not four meters reading zero.
+   * Both branches are placed after every hook so the hook order never changes
+   * between renders.
+   */
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <p className="text-sm text-muted">Duke kontrolluar sesionin…</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <WelcomePreview />;
+  }
+
   const totalFlashcards = studySets.reduce(
     (sum, set) => sum + set.flashcardCount,
     0,
@@ -171,6 +190,13 @@ export function DashboardOverview() {
 
   return (
     <div className="space-y-4">
+      {/*
+        Confirms an upgrade after the buyer returns from Whop. The plan is
+        granted by a webhook that lands a few seconds later, so without this the
+        customer has paid and sees no change.
+      */}
+      <UpgradeNotice />
+
       {/*
         The daily meters: what has been made, how much has been studied, and the
         goal. Each figure comes from the server.

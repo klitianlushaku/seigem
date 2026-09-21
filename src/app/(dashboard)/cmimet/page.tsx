@@ -10,11 +10,13 @@
  * graphics, no marketing statistics.
  */
 import { useCallback, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { Alert, Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { MERCHANT_OF_RECORD } from "@/config/app";
 import { PLAN_ORDER, getPlan, type PlanId } from "@/config/plans";
 
 /** A single plan's usage limits, in Albanian. */
@@ -161,11 +163,31 @@ export default function PricingPage() {
         })}
       </div>
 
+      {/*
+        Merchant-of-record notice plus links to the legal pages. Both are
+        expected where subscriptions are sold: the buyer has to be able to read
+        the terms and the privacy policy BEFORE paying, and Whop's guidance asks
+        for its name to be visible next to the price.
+      */}
       <p className="text-xs leading-5 text-muted">
-        Pagesat përpunohen nga Whop. Plani aktivizohet vetëm pasi pagesa
-        konfirmohet. Mund ta anulosh abonimin në çdo moment; abonimi mbetet
-        aktiv deri në fund të periudhës së paguar.
+        Pagesat përpunohen nga {MERCHANT_OF_RECORD}, i cili vepron si tregtar i
+        regjistruar (merchant of record) dhe trajton faturat, taksat dhe
+        rimbursimet. Plani aktivizohet vetëm pasi pagesa konfirmohet. Mund ta
+        anulosh abonimin në çdo moment; abonimi mbetet aktiv deri në fund të
+        periudhës së paguar.
       </p>
+
+      <nav className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+        <Link href="/kushtet" className="text-muted hover:text-content hover:underline">
+          Kushtet e përdorimit
+        </Link>
+        <Link
+          href="/privatesia"
+          className="text-muted hover:text-content hover:underline"
+        >
+          Politika e privatësisë
+        </Link>
+      </nav>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 
 import { ApiError, API_ERROR_MESSAGES } from "@/server/http/errors";
+import { reportError } from "@/server/monitoring/report";
 
 /**
  * Converts any thrown value into a safe JSON error response.
@@ -20,6 +21,15 @@ export function errorResponse(error: unknown, context: string): NextResponse {
   }
 
   console.error(`[api] ${context} failed:`, error);
+
+  /*
+   * An unrecognised error means a bug, not a rejected request, so it is sent to
+   * monitoring as well as the log. Reporting is fire-and-forget: a request must
+   * never wait on, or fail because of, error reporting. `reportError` is a no-op
+   * when no DSN is configured.
+   */
+  void reportError(error, context);
+
   return NextResponse.json(
     {
       error: {

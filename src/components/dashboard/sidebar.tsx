@@ -290,6 +290,30 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           </span>
           <ChevronRightIcon size={15} className="shrink-0 text-muted" />
         </Link>
+
+        {/*
+          Legal links. Required to be reachable before a purchase, and a buyer
+          looking for the terms should not have to guess a URL.
+        */}
+        <nav
+          aria-label="Informacione ligjore"
+          className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-[var(--color-line)] px-1 pt-3 text-[11px]"
+        >
+          <Link
+            href="/kushtet"
+            {...navProps}
+            className="text-muted transition-colors hover:text-content"
+          >
+            Kushtet
+          </Link>
+          <Link
+            href="/privatesia"
+            {...navProps}
+            className="text-muted transition-colors hover:text-content"
+          >
+            Privatësia
+          </Link>
+        </nav>
       </div>
     </div>
   );

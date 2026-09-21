@@ -28,6 +28,7 @@
  * Whop's delivery, retries, and event scheduling. Use Whop's dashboard
  * "send test event" button for that. This tests everything on our side.
  */
+/* eslint-disable no-console -- a CLI tool; printed output is the deliverable */
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -83,7 +84,6 @@ if (!secret) {
 const mainEntry = require.resolve("firebase-admin");
 const packageRoot = path.dirname(path.dirname(mainEntry));
 const adminApp = require(path.join(packageRoot, "lib", "app", "index.js"));
-const adminAuth = require(path.join(packageRoot, "lib", "auth", "index.js"));
 const adminFirestore = require(path.join(packageRoot, "lib", "firestore", "index.js"));
 
 const app = adminApp.initializeApp({

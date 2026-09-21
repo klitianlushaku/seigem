@@ -46,6 +46,7 @@
  * currencies (Plus in EUR, Pro in USD), so each needs its own code. The plan is
  * looked up to pick the right currency automatically.
  */
+/* eslint-disable no-console -- a CLI tool; printed output is the deliverable */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

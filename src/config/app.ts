@@ -9,6 +9,30 @@ export const APP_NAME = "Seigem";
 export const APP_LOCALE = "sq";
 
 /**
+ * Contact address shown on the legal pages and used for data requests.
+ *
+ * REPLACE THIS before going live. It must be a mailbox someone actually reads:
+ * GDPR data requests and cancellation questions arrive here, and an unread
+ * address is itself a compliance problem.
+ */
+export const SUPPORT_EMAIL = "support@seigem.app";
+
+/**
+ * Date the legal pages were last revised, in Albanian, shown to the reader.
+ * Update it whenever the wording changes.
+ */
+export const LEGAL_LAST_UPDATED = "21 Shtator 2026";
+
+/**
+ * The merchant of record for payments.
+ *
+ * Whop sells on Seigem's behalf, so the payment terms are Whop's and their
+ * name must appear in the terms. Whop's guidance requires this notice to be
+ * visible at checkout, which is why it is also stated on the pricing page.
+ */
+export const MERCHANT_OF_RECORD = "Whop";
+
+/**
  * Maximum accepted upload size, in bytes (25 MB).
  * Enforced in the browser before parsing and re-checked server-side.
  */

@@ -69,7 +69,9 @@ export function FlashcardsPanel({
       title="Flashcards"
       subtitle="Mëso në mënyrë të shpejtë dhe efektive."
       action={
-        <div className="flex items-center gap-2">
+        // `flex-wrap` so the button and counter can stack on a narrow phone
+        // rather than forcing the panel wider than the viewport.
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {onRequestMore ? (
             <Button variant="secondary" onClick={onRequestMore}>
               Gjenero më shumë

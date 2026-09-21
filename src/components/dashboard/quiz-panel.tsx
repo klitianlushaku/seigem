@@ -170,7 +170,9 @@ export function QuizPanel({
       title="Kuiz"
       subtitle="Testo njohuritë e tua dhe ndiq përparimin."
       action={
-        <div className="flex items-center gap-2">
+        // Three controls plus a counter here, so wrapping is essential on a
+        // narrow phone; without it the panel overflowed the viewport.
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {onRequestMore ? (
             <Button variant="secondary" onClick={onRequestMore}>
               Gjenero më shumë

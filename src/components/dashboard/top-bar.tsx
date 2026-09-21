@@ -97,10 +97,19 @@ export function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
         {isDashboard ? (
           <div className="min-w-0">
             <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">
-              Mirë se u ktheve{firstName ? `, ${firstName}` : ""} 👋
+              {/*
+                A visitor who is not signed in has not been here before, so
+                "welcome back" is wrong for them. They get a plain welcome and
+                an invitation instead.
+              */}
+              {user
+                ? `Mirë se u ktheve${firstName ? `, ${firstName}` : ""} 👋`
+                : "Mirë se vjen në Seigem 👋"}
             </h1>
             <p className="mt-0.5 truncate text-xs text-muted">
-              Sot është një ditë e mirë për të mësuar diçka të re.
+              {user
+                ? "Sot është një ditë e mirë për të mësuar diçka të re."
+                : "Shiko më poshtë si funksionon — pastaj provoje vetë."}
             </p>
           </div>
         ) : null}
