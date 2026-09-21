@@ -1,28 +1,44 @@
 /**
- * Creates a 100%-off Whop promo code, for testing a real purchase for free.
+ * Creates a Whop promo code for testing a real purchase cheaply.
  *
  * Run with:
- *   node tools/create-test-promo-code.mjs
- *   node tools/create-test-promo-code.mjs --code SEIGEMTEST --plan plus
- *   node tools/create-test-promo-code.mjs --plan pro --code PROTEST
+ *   node tools/create-test-promo-code.mjs                      # 100% off Plus
+ *   node tools/create-test-promo-code.mjs --pay 1              # pay 1 EUR for Plus
+ *   node tools/create-test-promo-code.mjs --plan pro --pay 1   # pay 1 USD for Pro
+ *   node tools/create-test-promo-code.mjs --code SEIGEMTEST
  *
- * WHY A 100% OFF CODE
- * -------------------
- * It makes the REAL purchase path run at zero cost: a genuine Whop checkout,
- * a genuine membership, and a genuine webhook delivered by Whop to the deployed
- * endpoint. That last part is what the local simulator cannot cover, and it is
- * where the interesting failures live (a delivery that never arrives, or arrives
- * with a payload whose shape we misread).
+ * WHY A PROMO CODE RATHER THAN A CHEAP PLAN
+ * -----------------------------------------
+ * Creating a new 1 EUR product/plan in Whop does NOT work for this, and the
+ * reason is easy to miss: `planForWhopProduct` maps only the two configured
+ * PRODUCT ids to a Seigem plan. A new product id maps to nothing, so
+ * `resolveEntitlement` returns "ignore" and NO plan is granted — the payment
+ * would succeed and the account would stay on Free, which is the exact failure
+ * this whole exercise is meant to rule out.
+ *
+ * Discounting the EXISTING plan keeps the product id that the webhook matches
+ * on, so the test exercises the real mapping.
+ *
+ * WHAT EACH MODE TESTS
+ * --------------------
+ *   --pay 0 (default) : a real checkout and a real webhook, but no money moves.
+ *                       Proves delivery, signature verification and the grant.
+ *   --pay 1           : additionally proves a genuine CHARGE grants the plan,
+ *                       and that `payment.succeeded` arrives alongside
+ *                       `membership.activated`.
+ *
+ * RENEWAL WARNING
+ * ---------------
+ * Whop subscriptions renew. A one-month discount means the NEXT month bills the
+ * full price. The default here is therefore 12 discounted months, so a forgotten
+ * cancellation costs 1 (not the full plan price). Cancel after testing anyway:
+ * Whop dashboard -> Memberships -> the member -> Cancel.
  *
  * REQUIRED API SCOPES
  * -------------------
- * Creating a code through the API needs `promo_code:create` and
- * `access_pass:basic:read`. If the key lacks them Whop answers 403 and this
- * script says so.
- *
- * You do NOT need those scopes: creating the code by hand in the Whop dashboard
- * (Product -> Promo codes -> Create) achieves the same thing. This script just
- * makes it repeatable.
+ * `promo_code:create` and `access_pass:basic:read`. Without them Whop answers
+ * 403 and this script says so. You can always create the code by hand instead:
+ * dashboard -> the product -> Promo codes -> Create.
  *
  * CURRENCY NOTE
  * -------------
@@ -62,6 +78,14 @@ const plan = flag("plan", "plus");
 const code = flag("code", `SEIGEMTEST${plan.toUpperCase()}`);
 const months = Number(flag("months", "12"));
 
+/**
+ * Amount the buyer should actually pay, or null for "free".
+ * `--pay 1` on a 5.99 plan discounts it by 4.99.
+ */
+const payAmount = process.argv.includes("--pay")
+  ? Number(flag("pay", "0"))
+  : null;
+
 const baseUrl = (env.WHOP_BASE_URL || "https://api.whop.com/api/v1").replace(/\/+$/, "");
 const apiKey = env.WHOP_API_KEY;
 
@@ -91,30 +115,67 @@ const planData = await planResponse.json();
 const currency = planData?.currency ?? null;
 const productId = planData?.product?.id ?? null;
 const accountId = planData?.account?.id ?? null;
+// What the plan bills each cycle; `initial_price` is often 0 on a renewal plan.
+const listPrice =
+  typeof planData?.renewal_price === "number" ? planData.renewal_price : null;
 
 if (!currency || !accountId) {
   console.error("The plan response did not include a currency/account id.");
   process.exit(1);
 }
 
+// --- Decide the discount ----------------------------------------------------
+// `amount_off` units depend on promo_type: a percent for `percentage`, and a
+// CURRENCY AMOUNT for `flat_amount` (4.99, not 499).
+let promoType;
+let amountOff;
+let discountLabel;
+
+if (payAmount === null || payAmount <= 0) {
+  promoType = "percentage";
+  amountOff = 100;
+  discountLabel = `100% off — pay nothing`;
+} else {
+  if (listPrice === null) {
+    console.error("The plan did not report a renewal_price, so a partial discount cannot be computed.");
+    process.exit(1);
+  }
+  const discount = Math.round((listPrice - payAmount) * 100) / 100;
+  if (discount <= 0) {
+    console.error(
+      `--pay ${payAmount} is not less than the plan price ${listPrice} ${currency.toUpperCase()}. ` +
+        "There is nothing to discount.",
+    );
+    process.exit(1);
+  }
+  promoType = "flat_amount";
+  amountOff = discount;
+  discountLabel =
+    `${discount} ${currency.toUpperCase()} off — pay ${payAmount} ${currency.toUpperCase()} ` +
+    `instead of ${listPrice} ${currency.toUpperCase()}`;
+}
+
 console.log(`Plan     : ${planId} (${planData?.product?.title ?? "?"})`);
 console.log(`Currency : ${currency}`);
 console.log(`Account  : ${accountId}`);
 console.log(`Code     : ${code}`);
-console.log(`Discount : 100% off, first ${months} billing month(s)`);
+console.log(`Discount : ${discountLabel}`);
+console.log(`Covers   : first ${months} billing month(s)`);
 console.log("");
 
 // --- Create the code --------------------------------------------------------
 const body = {
-  // 100% off. `percentage` reads this as a percent.
-  amount_off: 100,
-  promo_type: "percentage",
+  // Units follow promo_type: a percent for `percentage`, a currency amount for
+  // `flat_amount`. Sending 499 here would mean 499 EUR off, not 4.99.
+  amount_off: amountOff,
+  promo_type: promoType,
   base_currency: currency,
   code,
   account_id: accountId,
   // Let the code be used by the person testing it, even if they already bought.
   new_users_only: false,
-  // Cover a full year, so a renewal test does not suddenly charge.
+  // Default 12 months, so a forgotten cancellation costs the discounted amount
+  // rather than the full plan price.
   promo_duration_months: months,
   // Scoped to this plan so it cannot be used on the other one by accident.
   plan_ids: [planId],
@@ -154,16 +215,21 @@ console.log(`Created promo code: ${created.code ?? code}`);
 console.log(`  id      : ${created.id ?? "(none)"}`);
 console.log(`  uses    : ${created.stock ?? "?"} max`);
 console.log("");
-console.log("Now test a real purchase, at zero cost:");
+console.log("Now test a real purchase:");
 console.log(`  1. Open https://seigem.vercel.app/cmimet`);
 console.log(`  2. Click "${plan === "pro" ? "Pro" : "Plus"}"`);
 console.log(`  3. On the Whop checkout, enter the code: ${created.code ?? code}`);
-console.log("  4. The total should become 0 — complete the purchase");
+console.log(
+  payAmount && payAmount > 0
+    ? `  4. The total should become ${payAmount} ${currency.toUpperCase()} — pay with a real card`
+    : "  4. The total should become 0 — complete the purchase",
+);
 console.log("");
-console.log("Then watch the deployment logs for the webhook. The plan should");
-console.log("change on /cilesimet within a few seconds.");
+console.log("Then confirm the plan flipped on /cilesimet within a few seconds.");
 console.log("");
 console.log(
-  "NOTE: Whop may still ask for a card so it can bill a later renewal.\n" +
-    "Nothing is charged while the discount applies.",
+  "IMPORTANT — CANCEL AFTERWARDS. This creates a real subscription.\n" +
+    `The discounted price applies for ${months} month(s); cancel in the Whop\n` +
+    "dashboard (Memberships -> the member -> Cancel) once you have confirmed\n" +
+    "the grant, so nothing renews.",
 );
