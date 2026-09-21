@@ -324,3 +324,49 @@ export function absoluteCheckoutUrl(
 
   return `https://whop.com${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
 }
+
+/**
+ * Validates a post-purchase redirect URL, or returns null to omit it.
+ *
+ * Whop rejects the whole request with HTTP 400 when `redirect_url` is not a
+ * valid https URL:
+ *
+ *   "The redirect URL must be a valid URL, starting with https://"
+ *
+ * That happened in production because `NEXT_PUBLIC_APP_URL` fell back to
+ * `http://localhost:3000`, so every checkout attempt failed — even though the
+ * payment itself was perfectly configured.
+ *
+ * Returning null when the URL cannot be used is deliberate: Whop then falls
+ * back to its own post-purchase page, which still lets the customer pay and
+ * still delivers the webhook that grants the plan. Blocking the sale over a
+ * cosmetic redirect would be far worse than landing the buyer on Whop's page.
+ *
+ * Only `https:` is accepted. Whop requires it, and a plaintext URL would leak
+ * the session in transit on the way back.
+ *
+ * @param value Candidate absolute URL, e.g. "https://example.com/dashboard".
+ */
+export function safeRedirectUrl(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // Tolerate a host without a scheme ("example.com/x") by assuming https, which
+  // is what a production deployment always wants.
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "https:") return null;
+
+  return parsed.toString();
+}

@@ -20,6 +20,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { PAID_PLAN_IDS, getPlan, type PlanId } from "@/config/plans";
+import { safeRedirectUrl } from "@/lib/billing";
 import { publicEnv } from "@/lib/env/public";
 import { serverEnv } from "@/lib/env/server";
 import { createCheckoutConfiguration } from "@/server/billing/checkout";
@@ -50,6 +51,35 @@ function planIdFor(plan: PlanId): string | null {
 function isPaidPlan(value: unknown): value is PlanId {
   return (
     typeof value === "string" && PAID_PLAN_IDS.includes(value as PlanId)
+  );
+}
+
+/**
+ * Builds the post-checkout redirect, or null when no usable URL exists.
+ *
+ * The REQUEST's own origin is preferred over `NEXT_PUBLIC_APP_URL`, because it
+ * is always correct for the deployment actually serving the user. The env var
+ * is only a fallback, and it is not trustworthy: it is inlined at BUILD time,
+ * so a missing or stale value ships a wrong URL forever. That is exactly what
+ * happened — production sent `http://localhost:3000`, and Whop rejected the
+ * checkout with HTTP 400 "The redirect URL must be a valid URL, starting with
+ * https://", which blocked every sale.
+ *
+ * `safeRedirectUrl` returns null for anything not usable (a non-https URL, or a
+ * malformed one), in which case Whop uses its own post-purchase page. The
+ * customer can still pay, and the webhook still grants the plan — losing a
+ * cosmetic redirect is a far better outcome than losing the sale.
+ */
+function postCheckoutRedirect(request: NextRequest): string | null {
+  const fromRequest = safeRedirectUrl(
+    `${request.nextUrl.origin}/dashboard?checkout=return`,
+  );
+  if (fromRequest) return fromRequest;
+
+  // Fall back to the configured URL, which is the only option in some
+  // proxy setups where the origin is not the public one.
+  return safeRedirectUrl(
+    `${publicEnv.appUrl.replace(/\/+$/, "")}/dashboard?checkout=return`,
   );
 }
 
@@ -99,10 +129,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const currentPlan = await getUserPlan(decoded.uid);
 
-    const appUrl = publicEnv.appUrl;
-    const redirectUrl = appUrl
-      ? `${appUrl.replace(/\/+$/, "")}/dashboard?checkout=return`
-      : null;
+    const redirectUrl = postCheckoutRedirect(request);
 
     const checkout = await createCheckoutConfiguration({
       planId,

@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   absoluteCheckoutUrl,
   buildCheckoutConfigurationBody,
+  safeRedirectUrl,
   classifyEvent,
   coercePlan,
   parseDate,
@@ -417,6 +418,59 @@ describe("checkout configuration body", () => {
     // configuration error that must be visible in the body, not silently sent.
     const body = buildCheckoutConfigurationBody(request);
     assert.equal("product_id" in body, false);
+  });
+});
+
+// ===========================================================================
+// Post-checkout redirect
+// ===========================================================================
+describe("safeRedirectUrl", () => {
+  it("keeps a valid https URL", () => {
+    assert.equal(
+      safeRedirectUrl("https://seigem.vercel.app/dashboard?checkout=return"),
+      "https://seigem.vercel.app/dashboard?checkout=return",
+    );
+  });
+
+  /**
+   * The production failure this guards:
+   *
+   *   HTTP 400: The redirect URL must be a valid URL, starting with https://
+   *
+   * `NEXT_PUBLIC_APP_URL` fell back to http://localhost:3000, so every checkout
+   * was rejected by Whop and no sale could complete.
+   */
+  it("REJECTS a plain http URL, which Whop refuses", () => {
+    assert.equal(
+      safeRedirectUrl("http://localhost:3000/dashboard?checkout=return"),
+      null,
+    );
+    assert.equal(safeRedirectUrl("http://seigem.vercel.app/dashboard"), null);
+  });
+
+  it("assumes https for a bare host", () => {
+    assert.equal(
+      safeRedirectUrl("seigem.vercel.app/dashboard"),
+      "https://seigem.vercel.app/dashboard",
+    );
+  });
+
+  it("returns null for empty, missing or malformed values", () => {
+    assert.equal(safeRedirectUrl(null), null);
+    assert.equal(safeRedirectUrl(undefined), null);
+    assert.equal(safeRedirectUrl(""), null);
+    assert.equal(safeRedirectUrl("   "), null);
+    assert.equal(safeRedirectUrl("not a url at all"), null);
+  });
+
+  it("never returns a non-https protocol", () => {
+    for (const value of [
+      "ftp://example.com/x",
+      "javascript:alert(1)",
+      "data:text/html,hi",
+    ]) {
+      assert.equal(safeRedirectUrl(value), null, `${value} must be rejected`);
+    }
   });
 });
 
