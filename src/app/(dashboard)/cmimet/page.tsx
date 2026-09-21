@@ -14,10 +14,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { usePlan } from "@/components/billing/use-plan";
 import { Alert, Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { MERCHANT_OF_RECORD } from "@/config/app";
 import { PLAN_ORDER, getPlan, type PlanId } from "@/config/plans";
+import { cn } from "@/lib/utils/cn";
 
 /** A single plan's usage limits, in Albanian. */
 function limitRows(planId: PlanId): Array<{ label: string; value: string }> {
@@ -38,9 +40,18 @@ const PLAN_NOTES: Record<PlanId, string> = {
 
 export default function PricingPage() {
   const { user, getIdToken } = useAuth();
+  const { plan: currentPlan, loading: planLoading } = usePlan();
   const router = useRouter();
   const [pending, setPending] = useState<PlanId | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * True when the visitor already has a paid plan, so no purchase should be
+   * offered. The server refuses it anyway; this is what stops the button being
+   * shown as if it would work.
+   */
+  const hasPaidPlan =
+    currentPlan === "plus" || currentPlan === "pro";
 
   const upgrade = useCallback(
     async (plan: PlanId) => {
@@ -112,10 +123,27 @@ export default function PricingPage() {
         {PLAN_ORDER.map((planId) => {
           const plan = getPlan(planId);
           const isPaid = plan.priceCents > 0;
+          /** This is the plan the visitor is already on. */
+          const isCurrent = currentPlan === planId;
 
           return (
-            <Card key={planId} className="flex flex-col">
-              <h2 className="text-base font-medium">{plan.name}</h2>
+            <Card
+              key={planId}
+              className={cn(
+                "flex flex-col",
+                // The active plan is marked by its border, so it is obvious at
+                // a glance which one is already paid for.
+                isCurrent && "border-accent/50",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-base font-medium">{plan.name}</h2>
+                {isCurrent ? (
+                  <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-3 tracking-[0.08em] text-accent">
+                    Plani yt
+                  </span>
+                ) : null}
+              </div>
 
               <p className="mt-3">
                 <span className="text-3xl font-semibold tracking-tight">
@@ -138,10 +166,26 @@ export default function PricingPage() {
               </dl>
 
               <div className="mt-5">
-                {isPaid ? (
+                {/*
+                  No purchase is offered to someone who already has a paid plan,
+                  including for a DIFFERENT plan: this flow creates a new Whop
+                  subscription rather than replacing one, so switching would
+                  leave them paying twice. The server refuses it as well.
+                */}
+                {hasPaidPlan ? (
+                  isCurrent ? (
+                    <Button variant="secondary" disabled className="w-full">
+                      Plani yt aktual
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" disabled className="w-full">
+                      Kërko anulim fillimisht
+                    </Button>
+                  )
+                ) : isPaid ? (
                   <Button
                     onClick={() => void upgrade(planId)}
-                    disabled={pending !== null}
+                    disabled={pending !== null || planLoading}
                     className="w-full"
                   >
                     {pending === planId ? "Duke u hapur…" : "Përmirëso planin"}
@@ -162,6 +206,20 @@ export default function PricingPage() {
           );
         })}
       </div>
+
+      {/* Explains the disabled buttons, which otherwise look broken. */}
+      {hasPaidPlan ? (
+        <Card>
+          <h2 className="text-sm font-semibold">
+            Ke tashmë planin {currentPlan ? getPlan(currentPlan).name : ""}
+          </h2>
+          <p className="mt-1.5 text-xs leading-5 text-muted">
+            Abonimi yt rinovohet automatikisht. Për të kaluar në një plan tjetër,
+            anulo fillimisht abonimin aktual nga paneli i Whop, dhe pastaj zgjidh
+            planin e ri këtu. Kështu shmanget pagesa e dyfishtë.
+          </p>
+        </Card>
+      ) : null}
 
       {/*
         Merchant-of-record notice plus links to the legal pages. Both are

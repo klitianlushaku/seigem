@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PLANS, isPlanId, type PlanId } from "@/config/plans";
+import { PLAN_CHANGED, emitAppEvent } from "@/lib/app-events";
 import { fetchRemainingUsage } from "@/services/generation";
 import { useAuth } from "@/components/auth/auth-provider";
 import { cn } from "@/lib/utils/cn";
@@ -100,6 +101,9 @@ export function UpgradeNotice() {
         setPlan(current);
         setPhase("activated");
         clearCheckoutMarker();
+        // The sidebar badge and the pricing page both read the plan, so they
+        // are told to re-read it rather than waiting for a page reload.
+        emitAppEvent(PLAN_CHANGED);
         return;
       }
 

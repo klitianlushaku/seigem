@@ -17,6 +17,12 @@ export const NEW_MATERIAL = "seigem:new-material";
 /** Fired when a practice panel asks to open the full regeneration panel. */
 export const OPEN_MORE_MATERIAL = "seigem:open-more-material";
 
+/**
+ * Fired when the user's plan may have changed, e.g. after checkout returns and
+ * the webhook is applied. Anything showing the plan re-reads it.
+ */
+export const PLAN_CHANGED = "seigem:plan-changed";
+
 /** Dispatches an application event. Safe during server rendering. */
 export function emitAppEvent(name: string): void {
   if (typeof window === "undefined") return;

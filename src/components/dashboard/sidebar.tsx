@@ -26,6 +26,8 @@ import {
   PlusIcon,
   SettingsIcon,
 } from "@/components/ui/icons";
+import { usePlan } from "@/components/billing/use-plan";
+import { DEFAULT_PLAN_ID, PLANS, type PlanId } from "@/config/plans";
 import { HISTORY_CHANGED, NEW_MATERIAL, emitAppEvent } from "@/lib/app-events";
 import { cn } from "@/lib/utils/cn";
 import { relativeAlbanianDate } from "@/lib/utils/albanian-date";
@@ -34,8 +36,27 @@ import { fetchHistory, type StudySetSummary } from "@/services/history";
 /** How many recent materials the rail lists before deferring to /materialet. */
 const MAX_RECENT = 6;
 
+/** Small chip naming a paid plan beside the wordmark. */
+function PlanBadge({ plan }: { plan: PlanId }) {
+  const isPro = plan === "pro";
+
+  return (
+    <span
+      className={cn(
+        "rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase leading-3 tracking-[0.08em]",
+        isPro
+          ? "bg-stat-orange/18 text-stat-orange"
+          : "bg-accent/18 text-accent",
+      )}
+    >
+      {PLANS[plan].name}
+    </span>
+  );
+}
+
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, getIdToken } = useAuth();
+  const { plan: currentPlan } = usePlan();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -110,19 +131,33 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         : "text-muted hover:bg-surface-2 hover:text-content",
     );
 
+  /** The plan to show beside the wordmark; free while it is still unknown. */
+  const plan: PlanId = currentPlan ?? DEFAULT_PLAN_ID;
+  const hasPaidPlan = plan === "plus" || plan === "pro";
+
   return (
     <div className="dash-panel flex h-full flex-col border-y-0 border-l-0">
-      {/* Brand: mark, wordmark, then the tagline underneath. */}
+      {/* Brand: mark, wordmark with the plan, then the tagline underneath. */}
       <div className="flex items-start gap-2.5 px-3.5 py-3.5">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white">
           <BookIcon size={16} />
         </span>
         <span className="min-w-0">
-          <span className="block text-[15px] font-semibold leading-5 tracking-tight">
-            Seigem
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[15px] font-semibold leading-5 tracking-tight">
+              Seigem
+            </span>
+            {/*
+              The plan sits with the wordmark, so a paying user can see which
+              plan they are on without opening the account menu. Only shown for
+              paid plans: a "Falas" badge would be noise on the free tier.
+            */}
+            {hasPaidPlan ? <PlanBadge plan={plan} /> : null}
           </span>
           <span className="mt-0.5 block text-[10px] leading-3.5 text-muted">
-            Mëso më mirë, arrij më shumë.
+            {hasPaidPlan
+              ? `${PLANS[plan].name} — ${PLANS[plan].priceLabel} ${PLANS[plan].periodLabel}`
+              : "Mëso më mirë, arrij më shumë."}
           </span>
         </span>
       </div>

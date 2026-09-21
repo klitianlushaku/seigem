@@ -82,8 +82,14 @@ export function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
   const isDashboard = pathname === "/dashboard";
 
   return (
-    <header className="dash-panel flex shrink-0 flex-wrap items-center justify-between gap-3 border-x-0 border-t-0 px-3 py-2.5 sm:px-4">
-      <div className="flex min-w-0 items-center gap-3">
+    /*
+     * Deliberately NOT `flex-wrap`. With the greeting plus the controls, a
+     * wrapping header broke onto a second row at every phone width (320, 360 and
+     * 390px all measured 116px tall), which is what made it look broken. The
+     * left block now shrinks and truncates instead, so the header stays one row.
+     */
+    <header className="dash-panel flex shrink-0 items-center justify-between gap-3 border-x-0 border-t-0 px-3 py-2.5 sm:px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         {/* Mobile: open the navigation drawer. Hidden once the rail is visible. */}
         <button
           type="button"
@@ -96,17 +102,33 @@ export function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
 
         {isDashboard ? (
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">
-              {/*
-                A visitor who is not signed in has not been here before, so
-                "welcome back" is wrong for them. They get a plain welcome and
-                an invitation instead.
-              */}
-              {user
-                ? `Mirë se u ktheve${firstName ? `, ${firstName}` : ""} 👋`
-                : "Mirë se vjen në Seigem 👋"}
+            {/*
+              A visitor who is not signed in has not been here before, so
+              "welcome back" is wrong for them.
+
+              The greeting is shortened on a phone: the full wording needs
+              ~300px at this size, which cannot fit beside the menu button and
+              the account action on a 320px screen.
+            */}
+            <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">
+              {user ? (
+                <>
+                  <span className="sm:hidden">Mirë se u ktheve 👋</span>
+                  <span className="hidden sm:inline">
+                    Mirë se u ktheve{firstName ? `, ${firstName}` : ""} 👋
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="sm:hidden">Mirë se vjen 👋</span>
+                  <span className="hidden sm:inline">
+                    Mirë se vjen në Seigem 👋
+                  </span>
+                </>
+              )}
             </h1>
-            <p className="mt-0.5 truncate text-xs text-muted">
+            {/* The subtitle is the first thing to go when space is tight. */}
+            <p className="mt-0.5 hidden truncate text-xs text-muted sm:block">
               {user
                 ? "Sot është një ditë e mirë për të mësuar diçka të re."
                 : "Shiko më poshtë si funksionon — pastaj provoje vetë."}
@@ -115,39 +137,41 @@ export function TopBar({ onMenuClick }: { onMenuClick?: () => void }) {
         ) : null}
       </div>
 
-      <div
-        ref={containerRef}
-        className="ml-auto flex items-center gap-3 sm:gap-4"
-      >
-        {/* Notifications */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => {
-              setNoticesOpen((open) => !open);
-              setMenuOpen(false);
-            }}
-            aria-haspopup="true"
-            aria-expanded={noticesOpen}
-            aria-label="Njoftime"
-            className="flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-content"
-          >
-            <BellIcon size={19} />
-          </button>
-
-          {noticesOpen ? (
-            <div
-              role="dialog"
+      <div ref={containerRef} className="flex shrink-0 items-center gap-2 sm:gap-4">
+        {/*
+          Notifications only exist for a signed-in account. Showing the bell to a
+          visitor who has none is a control that can never do anything.
+        */}
+        {user ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setNoticesOpen((open) => !open);
+                setMenuOpen(false);
+              }}
+              aria-haspopup="true"
+              aria-expanded={noticesOpen}
               aria-label="Njoftime"
-              className="dash-panel absolute right-0 z-20 mt-2 w-64 rounded-xl p-4 text-sm"
+              className="flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-content"
             >
-              <p className="font-medium">Njoftime</p>
-              <p className="mt-1 text-xs text-muted">
-                Nuk ka njoftime të reja.
-              </p>
-            </div>
-          ) : null}
-        </div>
+              <BellIcon size={19} />
+            </button>
+
+            {noticesOpen ? (
+              <div
+                role="dialog"
+                aria-label="Njoftime"
+                className="dash-panel absolute right-0 z-20 mt-2 w-64 rounded-xl p-4 text-sm"
+              >
+                <p className="font-medium">Njoftime</p>
+                <p className="mt-1 text-xs text-muted">
+                  Nuk ka njoftime të reja.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Account menu: avatar, name, optional email underneath. */}
         {user ? (

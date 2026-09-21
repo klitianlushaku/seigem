@@ -19,7 +19,12 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { PAID_PLAN_IDS, getPlan, type PlanId } from "@/config/plans";
+import {
+  DEFAULT_PLAN_ID,
+  PAID_PLAN_IDS,
+  getPlan,
+  type PlanId,
+} from "@/config/plans";
 import { safeRedirectUrl } from "@/lib/billing";
 import { publicEnv } from "@/lib/env/public";
 import { serverEnv } from "@/lib/env/server";
@@ -128,6 +133,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const currentPlan = await getUserPlan(decoded.uid);
+
+    /*
+     * Refuse to sell a plan to someone who already has one.
+     *
+     * This endpoint creates a NEW Whop checkout configuration, and a completed
+     * checkout becomes a NEW subscription. Nothing in this flow replaces an
+     * existing one, so allowing a purchase while a paid plan is active would
+     * bill the customer TWICE: two memberships, two recurring charges, and only
+     * one plan recorded against their account.
+     *
+     * The check is server-side on purpose. A client-side guard is presentation;
+     * this is the boundary that decides whether money moves.
+     *
+     * Note this uses `getUserPlan`, which applies the expiry check, so a lapsed
+     * subscription reads as free and its owner can subscribe again normally.
+     */
+    if (currentPlan !== DEFAULT_PLAN_ID) {
+      const activeName = getPlan(currentPlan).name;
+      console.warn(
+        `[billing] refused a second checkout for ${decoded.uid}: ` +
+          `already on "${currentPlan}"`,
+      );
+      throw new ApiError(
+        "invalid_request",
+        `Ke tashmë planin ${activeName} aktiv. Anulo abonimin aktual përpara se të kalosh në një plan tjetër.`,
+      );
+    }
 
     const redirectUrl = postCheckoutRedirect(request);
 
