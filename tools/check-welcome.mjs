@@ -72,6 +72,34 @@ for (const viewport of VIEWPORTS) {
   );
   check("shows the how-it-works section", body.includes("Si funksionon"));
   check("states the free plan limits", body.includes("Plani Falas"));
+  check(
+    "describes what a document produces",
+    body.includes("Përmbledhje") && body.includes("Flashcards") && body.includes("Kuiz"),
+  );
+
+  // --- The upload target must be present and real ---------------------------
+  const dropZone = page.locator(".dash-dropzone").first();
+  check("an upload drop zone is rendered", (await dropZone.count()) > 0);
+  check(
+    "the drop zone names the accepted formats",
+    (await dropZone.textContent())?.includes("PDF") ?? false,
+  );
+
+  // Selecting a file must not silently do nothing: for a signed-out visitor it
+  // should be accepted and followed by a prompt to sign in.
+  if ((await dropZone.count()) > 0) {
+    await page.setInputFiles('input[type="file"]', {
+      name: "Ligjerata-3.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 test"),
+    });
+    await page.waitForTimeout(300);
+    const afterPick = await page.textContent("body");
+    check(
+      "selecting a file is acknowledged and asks for sign-in",
+      afterPick.includes("Ligjerata-3.pdf") && afterPick.includes("Hyr dhe vazhdo"),
+    );
+  }
 
   // The empty meters must be gone for a signed-out visitor.
   check("does NOT show the empty 'Studimi sot' meter", !body.includes("Studimi sot"));

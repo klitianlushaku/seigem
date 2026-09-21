@@ -6,31 +6,41 @@
  * A visitor who is not signed in used to see the full dashboard with every meter
  * reading zero, which looks broken rather than new.
  *
- * The first attempt at replacing it put one full-width flip card on the page.
- * On a 1440px screen that produced a 1,150px-wide card holding a single short
- * question: mostly empty space, no hierarchy, and it read as a template rather
- * than a study tool. This version is built on three rules:
+ * This is the third iteration, and the first two are worth recording because
+ * they show what "premium" actually means here:
  *
- *   1. USE THE WIDTH. Desktop gets two columns, so the page is not a single
- *      stretched strip. The card sits in a column and is capped at a sensible
- *      size, the way a real card is.
- *   2. REAL INFORMATION, NOT FILLER. Instead of decorative flourishes it states
- *      what Seigem produces, how it works in three steps, and exactly what the
- *      free plan allows. A student deciding whether to sign up needs those
- *      facts, not ornament.
- *   3. LOOK LIKE THE PRODUCT. The two previews use the same panel shell as the
- *      signed-in dashboard, so a visitor sees what they will actually get.
+ *   v1: one full-width flip card. At 1440px that was a 1,150px-wide card holding
+ *       one short question — mostly empty space, no hierarchy, looked like a
+ *       template.
+ *   v2: two columns and real sections. Correct, but still flat: every block had
+ *       the same weight, so nothing led the eye and it read as sparse.
+ *   v3 (this): a clear focal point. The headline carries the page, the upload
+ *       target sits directly beside the outcome it produces, and the remaining
+ *       sections step DOWN in weight — the quiz and the steps are visibly
+ *       subordinate to the hero.
  *
- * The samples are static and live only in this file. Nothing here touches
- * Firestore or the API, so an anonymous visitor costs nothing and cannot read
- * anyone's data.
+ * The design rules, deliberately:
+ *   - No decoration. No gradients, glows, blobs, illustrations or spot art.
+ *     Weight comes from type scale, spacing rhythm and the panel borders that
+ *     the rest of the app already uses.
+ *   - Real information only. The upload target, the deck, the quiz and the plan
+ *     limits are exactly what a student gets. Nothing is a mock-up of something
+ *     that does not exist.
+ *   - Reuse the product's own components, so the visitor sees the actual
+ *     interface rather than a marketing impression of it.
+ *
+ * Upload behaviour for a signed-out visitor: the drop zone is REAL. Dropping or
+ * selecting a file is accepted, the filename is shown, and the visitor is then
+ * asked to sign in. Nothing is uploaded — text extraction happens in the
+ * browser and generation needs an account — so the file never leaves the
+ * machine, and the visitor is never told something happened that did not.
  */
 import { useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Panel } from "@/components/dashboard/panel";
+import { DropZone } from "@/components/documents/drop-zone";
 import { FlipCard } from "@/components/study/flip-card";
 import { ArrowRightIcon, LayersIcon, QuizIcon } from "@/components/ui/icons";
 import { ACCEPTED_FORMATS_LABEL, MAX_FILE_SIZE_BYTES } from "@/config/app";
@@ -79,6 +89,30 @@ const SAMPLE_QUIZ = {
     "Klorofili është pigmenti i gjelbër në kloroplaste që thith dritën.",
 } as const;
 
+/** The three things a document produces, with a real example of each. */
+const OUTPUTS: readonly {
+  title: string;
+  example: string;
+  tone: "blue" | "green" | "orange";
+}[] = [
+  {
+    title: "Përmbledhje",
+    example:
+      "Fotosinteza ndodh në dy faza: reaksionet e varura nga drita dhe cikli i Calvin.",
+    tone: "blue",
+  },
+  {
+    title: "Flashcards",
+    example: "Një kartë për çdo koncept, me pyetjen nga njëra anë dhe përgjigjjen nga tjetra.",
+    tone: "green",
+  },
+  {
+    title: "Kuiz",
+    example: "Pyetje me katër alternativa dhe shpjegim për përgjigjjen e saktë.",
+    tone: "orange",
+  },
+];
+
 /** The three steps, stated plainly. */
 const STEPS: readonly { title: string; body: string }[] = [
   {
@@ -93,15 +127,24 @@ const STEPS: readonly { title: string; body: string }[] = [
   },
   {
     title: "Përsërit dhe testohu",
-    body: "Kthe kartat, përgjigju pyetjeve të kuizit dhe ndiq përparimin ditor. Materialet ruhen për herën tjetër.",
+    body: "Kthe kartat, përgjigju pyetjeve dhe ndiq përparimin ditor. Materialet ruhen për herën tjetër.",
   },
 ];
+
+/** Tint for the little output markers, matching the app's panel tones. */
+const OUTPUT_TONE_CLASSES: Record<string, string> = {
+  blue: "bg-stat-blue/12 text-stat-blue",
+  green: "bg-stat-green/12 text-stat-green",
+  orange: "bg-stat-orange/12 text-stat-orange",
+};
 
 export function WelcomePreview() {
   const [cardIndex, setCardIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   /** null until the visitor picks an option. */
   const [chosen, setChosen] = useState<number | null>(null);
+  /** Name of a file the visitor selected, so the next step is obvious. */
+  const [pickedFile, setPickedFile] = useState<string | null>(null);
 
   const card = SAMPLE_CARDS[cardIndex] ?? FIRST_SAMPLE_CARD;
   const loginHref = "/login?next=%2Fdashboard";
@@ -115,93 +158,173 @@ export function WelcomePreview() {
 
   return (
     <div className="space-y-4">
-      {/* --- What it is, and the one action ------------------------------- */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 max-w-2xl">
-          <h1 className="text-xl font-semibold leading-snug tracking-tight sm:text-2xl">
-            Kthe materialin e kursit në flashcards dhe kuize
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            Ngarko një {ACCEPTED_FORMATS_LABEL}. Seigem nxjerr tekstin, shkruan
-            përmbledhjen dhe krijon kartat e pyetjet — njësoj siç do t&apos;i
-            bëje vetë, por në një hap.
-          </p>
+      {/* ==================================================================
+          HERO — the focal point. Headline, the upload target, and the thing
+          it produces, side by side.
+          ================================================================== */}
+      <section className="dash-panel rounded-[22px] p-5 sm:p-7">
+        <div className="grid gap-7 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:items-center">
+          {/* --- Left: the promise, and the action --------------------- */}
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent">
+              Studim nga dokumentet e tua
+            </p>
+
+            <h1 className="mt-3 text-[1.6rem] font-semibold leading-[1.15] tracking-tight sm:text-[2rem] lg:text-[2.15rem]">
+              Kthe materialin e kursit në flashcards dhe kuize
+            </h1>
+
+            <p className="mt-3 max-w-lg text-sm leading-6 text-muted">
+              Ngarko një {ACCEPTED_FORMATS_LABEL}. Seigem nxjerr tekstin, shkruan
+              përmbledhjen dhe krijon kartat e pyetjet — njësoj siç do t&apos;i
+              bëje vetë, por në një hap.
+            </p>
+
+            {/* The upload target. Real: it accepts a drop, then explains that
+                an account is needed to generate. */}
+            <div className="mt-5">
+              <DropZone
+                onFiles={(files) => {
+                  const first = files[0];
+                  if (first) setPickedFile(first.name);
+                }}
+                formatsLabel="PDF, DOCX, PPTX"
+                sizeLabel={`(maks. ${Math.round(MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB)`}
+                multiple={false}
+              />
+            </div>
+
+            {pickedFile ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/10 px-3.5 py-2.5">
+                <p className="min-w-0 truncate text-xs">
+                  <span className="font-semibold">{pickedFile}</span>
+                  <span className="text-muted"> — gati për gjenerim.</span>
+                </p>
+                <Link href={loginHref} className="shrink-0">
+                  <Button className="px-3 py-1.5 text-xs">
+                    Hyr dhe vazhdo
+                    <ArrowRightIcon size={14} />
+                  </Button>
+                </Link>
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted">
+              <span>Hyr me Google</span>
+              <span aria-hidden="true" className="text-line-strong">
+                ·
+              </span>
+              <span>Pa kartë krediti</span>
+              <span aria-hidden="true" className="text-line-strong">
+                ·
+              </span>
+              <span>Dokumenti nuk ruhet</span>
+            </div>
+          </div>
+
+          {/* --- Right: the outcome, as a real deck ---------------------- */}
+          <div className="min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Shembull rezultati
+              </p>
+              <p className="text-xs tabular-nums text-muted">
+                {cardIndex + 1} / {SAMPLE_CARDS.length}
+              </p>
+            </div>
+
+            {/*
+              Deck depth: two cards peeking out BELOW the active one, using the
+              same `deck-layer` treatment as the signed-in deck. They are sized
+              to the card (inside the same max-w-sm wrapper) rather than to the
+              column — a deck that sticks out at the sides reads as a stray box,
+              not as a stack.
+            */}
+            <div className="mt-3 pb-5">
+              <div className="relative mx-auto w-full max-w-sm">
+                <div
+                  aria-hidden="true"
+                  className="deck-layer absolute inset-x-4 -bottom-1.5 h-6 rounded-2xl border border-line bg-surface-2"
+                />
+                <div
+                  aria-hidden="true"
+                  className="deck-layer absolute inset-x-2 -bottom-3 h-6 rounded-2xl border border-line bg-surface-2"
+                />
+
+                <div className="relative">
+                  <FlipCard
+                    key={cardIndex}
+                    flipped={flipped}
+                    onToggle={() => setFlipped((value) => !value)}
+                    label={`Karta mostër ${cardIndex + 1}. Trokit për ta kthyer.`}
+                    front={
+                      <>
+                        <span className="flashcard-eyebrow">Pyetja</span>
+                        <p className="mt-2.5 text-[15px] font-medium leading-6">
+                          {card.question}
+                        </p>
+                        <span className="mt-3 text-[11px] text-accent">
+                          Trokit për përgjigjen
+                        </span>
+                      </>
+                    }
+                    back={
+                      <>
+                        <span className="flashcard-eyebrow">Përgjigjja</span>
+                        <p className="mt-2.5 text-[15px] leading-6">
+                          {card.answer}
+                        </p>
+                      </>
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[11px] leading-4 text-muted">
+                Nga një dokument i vërtetë.
+              </p>
+              <Button
+                variant="secondary"
+                onClick={nextCard}
+                className="shrink-0 px-3 py-1.5 text-xs"
+              >
+                Karta tjetër
+              </Button>
+            </div>
+          </div>
         </div>
-        <div className="shrink-0 sm:pt-1">
-          <Link href={loginHref} className="block">
-            <Button className="w-full sm:w-auto">
-              Fillo tani
-              <ArrowRightIcon size={16} />
-            </Button>
-          </Link>
-          <p className="mt-2 text-center text-[11px] text-muted sm:text-right">
-            Hyr me Google · Pa kartë krediti
-          </p>
-        </div>
+      </section>
+
+      {/* ==================================================================
+          WHAT A DOCUMENT PRODUCES — three outputs, each with a real example.
+          ================================================================== */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        {OUTPUTS.map((output) => (
+          <div
+            key={output.title}
+            className="dash-panel rounded-[22px] p-4 sm:p-5"
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  OUTPUT_TONE_CLASSES[output.tone],
+                )}
+                aria-hidden="true"
+              />
+              <h2 className="text-[13px] font-semibold">{output.title}</h2>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted">{output.example}</p>
+          </div>
+        ))}
       </div>
 
-      {/* --- The two things Seigem makes, side by side --------------------- */}
+      {/* ==================================================================
+          THE QUIZ, AND HOW IT WORKS — deliberately lighter than the hero.
+          ================================================================== */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel
-          icon={LayersIcon}
-          tone="green"
-          title="Flashcards"
-          // Short enough not to be truncated by the panel header on a phone.
-          subtitle="Një kartë për çdo koncept."
-          action={
-            <span className="text-sm tabular-nums text-muted">
-              {cardIndex + 1} / {SAMPLE_CARDS.length}
-            </span>
-          }
-        >
-          {/*
-            Capped width. The card is a card: letting it stretch to the full
-            column width was what made the previous version look empty.
-          */}
-          <div className="mx-auto w-full max-w-sm">
-            <FlipCard
-              key={cardIndex}
-              flipped={flipped}
-              onToggle={() => setFlipped((value) => !value)}
-              label={`Karta mostër ${cardIndex + 1}. Trokit për ta kthyer.`}
-              front={
-                <>
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                    Pyetja
-                  </span>
-                  <p className="mt-2.5 text-[15px] font-medium leading-6">
-                    {card.question}
-                  </p>
-                  <span className="mt-3 text-[11px] text-accent">
-                    Trokit për përgjigjen
-                  </span>
-                </>
-              }
-              back={
-                <>
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-stat-green">
-                    Përgjigjja
-                  </span>
-                  <p className="mt-2.5 text-[15px] leading-6">{card.answer}</p>
-                </>
-              }
-            />
-          </div>
-
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <p className="text-[11px] leading-4 text-muted">
-              Shembull nga një dokument i vërtetë.
-            </p>
-            <Button
-              variant="secondary"
-              onClick={nextCard}
-              className="shrink-0 px-3 py-1.5 text-xs"
-            >
-              Karta tjetër
-            </Button>
-          </div>
-        </Panel>
-
         <Panel
           icon={QuizIcon}
           tone="orange"
@@ -273,32 +396,39 @@ export function WelcomePreview() {
             </div>
           ) : null}
         </Panel>
+
+        <Panel
+          icon={LayersIcon}
+          tone="green"
+          title="Si funksionon"
+          subtitle="Tri hapa, pa konfigurim."
+        >
+          <ol className="space-y-4">
+            {STEPS.map((step, index) => (
+              <li key={step.title} className="flex gap-3">
+                {/*
+                  A number, not an icon: it carries the order, which is real
+                  information. Decorative icons would add nothing here.
+                */}
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line-strong text-[11px] font-semibold tabular-nums text-muted">
+                  {index + 1}
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-[13px] font-semibold">{step.title}</h3>
+                  <p className="mt-1 text-xs leading-5 text-muted">
+                    {step.body}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </Panel>
       </div>
 
-      {/* --- How it works, in three steps --------------------------------- */}
-      <Card>
-        <h2 className="text-sm font-semibold">Si funksionon</h2>
-        <ol className="mt-4 grid gap-5 sm:grid-cols-3">
-          {STEPS.map((step, index) => (
-            <li key={step.title} className="flex gap-3">
-              {/*
-                A number, not an icon: it carries the order, which is real
-                information. Decorative icons would add nothing here.
-              */}
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line-strong text-[11px] font-semibold tabular-nums text-muted">
-                {index + 1}
-              </span>
-              <div className="min-w-0">
-                <h3 className="text-[13px] font-semibold">{step.title}</h3>
-                <p className="mt-1 text-xs leading-5 text-muted">{step.body}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </Card>
-
-      {/* --- What it costs, stated plainly -------------------------------- */}
-      <Card>
+      {/* ==================================================================
+          PRICE, AND THE CLOSING ACTION.
+          ================================================================== */}
+      <section className="dash-panel rounded-[22px] p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold">
@@ -332,7 +462,7 @@ export function WelcomePreview() {
             </Button>
           </Link>
         </div>
-      </Card>
+      </section>
     </div>
   );
 }
